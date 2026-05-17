@@ -680,7 +680,6 @@ class TransferSession {
         timer.cancel();
         return;
       }
-      Logger.log('[ENG] heartbeat: sending PING');
       _sendFrame(SessionMessages.buildPing());
     });
   }
@@ -718,7 +717,6 @@ class TransferSession {
 
           _frameBuffer = Uint8List.sublistView(_frameBuffer, totalLen);
         }
-        Logger.log('[ENG] socket data done: remaining=${_frameBuffer.length}');
       },
       onError: (e) {
         Logger.log('[ENG] socket listener onError: $e — cancelling transfer');
@@ -741,7 +739,13 @@ class TransferSession {
   }
 
   void _handleIncomingFrame(FlpFrame frame) {
-    Logger.log('[ENG] _handleIncomingFrame: type=0x${frame.type.toRadixString(16)}');
+    // Skip logging for high-frequency frames (FILE_ACK, FILE_NACK, FILE_COMPLETE)
+    if (frame.type != FlpMessageType.fileAck &&
+        frame.type != FlpMessageType.fileNack &&
+        frame.type != FlpMessageType.fileComplete &&
+        frame.type != FlpMessageType.pong) {
+      Logger.log('[ENG] _handleIncomingFrame: type=0x${frame.type.toRadixString(16)}');
+    }
     switch (frame.type) {
       case FlpMessageType.helloAck:
         break;
@@ -999,7 +1003,7 @@ class TransferSession {
 
   void _notifyProgress() {
     _progressDirty = true;
-    _progressTimer ??= Timer(const Duration(milliseconds: 100), () {
+    _progressTimer ??= Timer(const Duration(milliseconds: 250), () {
       _progressTimer = null;
       if (_progressDirty) {
         _progressDirty = false;

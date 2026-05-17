@@ -51,8 +51,8 @@ class ReceiveEngine {
   final List<double> _speedSamples = [];
   double _peakSpeed = 0;
 
-  static const _ackBatchBytes = 4 * 1024 * 1024; // 4 MB
-  static const _ackInterval = Duration(milliseconds: 200);
+  static const _ackBatchBytes = 16 * 1024 * 1024; // 16 MB
+  static const _ackInterval = Duration(milliseconds: 500);
 
   ReceiveEngine(this._uiPort) {
     _commandPort.listen(_handleCommand);
@@ -330,18 +330,13 @@ class ReceiveEngine {
 
   void _scheduleAck(String fileId) {
     if (_totalBytesWritten - _lastAckBytes >= _ackBatchBytes) {
-      Logger.log('[RECV] _scheduleAck: volume trigger, _sendAck fileId=$fileId bytesSinceLast=${_totalBytesWritten - _lastAckBytes}');
       _sendAck(fileId);
       _lastAckBytes = _totalBytesWritten;
       _ackTimer?.cancel();
       _ackTimer = null;
       return;
     }
-    if (_ackTimer == null) {
-      Logger.log('[RECV] _scheduleAck: timer created fileId=$fileId bytesSinceLast=${_totalBytesWritten - _lastAckBytes}');
-    }
     _ackTimer ??= Timer(_ackInterval, () {
-      Logger.log('[RECV] _scheduleAck: timer fired, _sendAck fileId=$fileId bytesSinceLast=${_totalBytesWritten - _lastAckBytes}');
       _sendAck(fileId);
       _lastAckBytes = _totalBytesWritten;
       _ackTimer = null;
@@ -352,7 +347,6 @@ class ReceiveEngine {
     final rf = _files[fileId];
     if (rf == null) return;
 
-    Logger.log('[RECV] _sendAck: fileId=$fileId ackOffset=${rf.bytesWritten} totalBytes=$_totalBytesWritten pendingSize=$_pendingSize');
     final ackPayload = utf8.encode(jsonEncode({
       'transferId': _transferId,
       'fileId': fileId,
@@ -475,7 +469,7 @@ class ReceiveEngine {
   // ═══════════════════════════════════════════════════════════
 
   void _notifyProgress() {
-    _progressTimer ??= Timer(const Duration(milliseconds: 100), () {
+    _progressTimer ??= Timer(const Duration(milliseconds: 250), () {
       _progressTimer = null;
       if (_cancelled) return;
       final avg = _avgSpeed();

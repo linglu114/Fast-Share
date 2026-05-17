@@ -2,11 +2,14 @@ import 'dart:async';
 import 'dart:io';
 
 /// Simple file logger for debugging. Writes to fastshare_debug.log in the user's temp directory.
+///
+/// Uses async file writes to avoid blocking the caller's thread.
 class Logger {
   static File? _file;
   static final _buffer = <String>[];
   static Timer? _flushTimer;
   static String? _logPath;
+  static bool _flushing = false;
 
   static String get path => _logPath ?? '';
 
@@ -16,7 +19,7 @@ class Logger {
       final name = suffix.isEmpty ? 'fastshare_debug.log' : 'fastshare_debug$suffix.log';
       _logPath = '$dirPath${Platform.pathSeparator}$name';
       _file = File(_logPath!);
-      _file!.writeAsStringSync('=== FastShare Debug Log ${DateTime.now()} ===\n', mode: FileMode.append);
+      _file!.writeAsString('=== FastShare Debug Log ${DateTime.now()} ===\n', mode: FileMode.append);
     } catch (_) {
       _file = null;
     }
@@ -30,25 +33,29 @@ class Logger {
   }
 
   static void _scheduleFlush() {
-    _flushTimer ??= Timer(const Duration(milliseconds: 500), () {
+    _flushTimer ??= Timer(const Duration(seconds: 2), () {
       _flushTimer = null;
       _flush();
     });
   }
 
-  static void _flush() {
+  static Future<void> _flush() async {
+    if (_flushing || _buffer.isEmpty) return;
+    _flushing = true;
     try {
-      if (_file != null && _buffer.isNotEmpty) {
+      if (_file != null) {
         final batch = _buffer.join('\n') + '\n';
-        _file!.writeAsStringSync(batch, mode: FileMode.append);
         _buffer.clear();
+        await _file!.writeAsString(batch, mode: FileMode.append);
       }
-    } catch (_) {}
+    } catch (_) {} finally {
+      _flushing = false;
+    }
   }
 
-  static void flushSync() {
+  static Future<void> flushSync() async {
     _flushTimer?.cancel();
     _flushTimer = null;
-    _flush();
+    await _flush();
   }
 }

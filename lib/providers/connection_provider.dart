@@ -218,7 +218,10 @@ class ConnectionNotifier extends Notifier<Map<String, bool>> {
     final type = event['type'] as String?;
     final transferId = event['transferId'] as String?;
     final rtask = ref.read(receiveTransferProvider);
-    Logger.log('[CN] _handleReceiveEvent: type=$type transferId=$transferId hasTask=${rtask != null} taskMatch=${rtask?.transferId == transferId}');
+    // Skip logging for high-frequency progress events to avoid main-thread I/O
+    if (type != 'progress') {
+      Logger.log('[CN] _handleReceiveEvent: type=$type transferId=$transferId hasTask=${rtask != null} taskMatch=${rtask?.transferId == transferId}');
+    }
     if (rtask == null || rtask.transferId != transferId) return;
 
     switch (type) {
