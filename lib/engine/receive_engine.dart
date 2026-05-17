@@ -1,0 +1,562 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:isolate';
+import 'dart:typed_data';
+import '../util/constants.dart';
+import '../util/logger.dart';
+import 'frame.dart';
+import 'performance_guard.dart';
+
+/// Receive Engine Isolate (FLP v1.2 §8)
+///
+/// Runs in a dedicated Isolate, handling frame parsing (CRC32), disk I/O,
+/// and ACK generation — symmetric to [TransferEngine] on the sender side.
+///
+/// Communication protocol (UI Isolate ↔ Engine Isolate via SendPort):
+///
+/// Commands (UI → Engine):
+///   start    {transferId, savePath}
+///   data     {transferId, rawBytes: Uint8List} — raw FILE_DATA / FILE_META frame
+///   pause    {transferId}
+///   resume   {transferId}
+///   cancel   {transferId}
+///   shutdown —
+///
+/// Events (Engine → UI):
+///   progress         {transferId, bytesWritten, totalSize, speed, peakSpeed}
+///   file_complete      {transferId, fileId, relativePath, success}
+///   transfer_complete  {transferId, success, totalWritten}
+///   error              {transferId, message}
+///   ack_frame          {transferId, frameBytes: Uint8List}
+class ReceiveEngine {
+  final SendPort _uiPort;
+  final ReceivePort _commandPort = ReceivePort();
+
+  String? _transferId;
+  String? _saveRoot;
+  bool _cancelled = false;
+  List<Map<String, dynamic>> _pendingFiles = []; // for directory pre-creation
+
+  final Map<String, _ReceivingFile> _files = {};
+  int _totalBytesWritten = 0;
+  int _pendingSize = 0;
+  int _lastAckBytes = 0;
+  Timer? _ackTimer;
+  Timer? _progressTimer;
+
+  // Speed tracking (1 s samples, 6 s sliding window)
+  int _lastSpeedTime = 0;
+  int _lastSpeedBytes = 0;
+  final List<double> _speedSamples = [];
+  double _peakSpeed = 0;
+
+  static const _ackBatchBytes = 4 * 1024 * 1024; // 4 MB
+  static const _ackInterval = Duration(milliseconds: 200);
+
+  ReceiveEngine(this._uiPort) {
+    _commandPort.listen(_handleCommand);
+    _uiPort.send({
+      'type': 'engine_ready',
+      'data': {'enginePort': _commandPort.sendPort},
+    });
+  }
+
+  void _sendEvent(String type, Map<String, dynamic> data) {
+    _uiPort.send({'type': type, 'data': data});
+  }
+
+  void _handleCommand(dynamic message) {
+    if (message is! Map<String, dynamic>) return;
+    final type = message['type'] as String?;
+    final payload = message['payload'] as Map<String, dynamic>? ?? {};
+
+    switch (type) {
+      case 'start':
+        _start(payload);
+        break;
+      case 'set_files':
+        _setFiles(payload);
+        break;
+      case 'data':
+        _handleData(payload);
+        break;
+      case 'pause':
+        _pause();
+        break;
+      case 'resume':
+        _resume();
+        break;
+      case 'cancel':
+        _cancel();
+        break;
+      case 'shutdown':
+        _shutdown();
+        break;
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // Lifecycle
+  // ═══════════════════════════════════════════════════════════
+
+  void _start(Map<String, dynamic> payload) {
+    _transferId = payload['transferId'] as String;
+    _saveRoot = payload['savePath'] as String;
+    Logger.log('[RECV] _start: transferId=$_transferId saveRoot=$_saveRoot');
+
+    // Pre-create directory structure from pending file list
+    if (_pendingFiles.isNotEmpty) {
+      final paths = _pendingFiles
+          .map((f) => (f['relativePath'] as String?)?.replaceAll('\\', '/'))
+          .where((p) => p != null && p.contains('/'))
+          .cast<String>()
+          .toList();
+      if (paths.isNotEmpty) {
+        try {
+          final rootDir = Directory(_saveRoot!);
+          if (!rootDir.existsSync()) {
+            rootDir.createSync(recursive: true);
+          }
+          for (final path in paths) {
+            final parts = path.split('/');
+            if (parts.length > 1) {
+              final subDir = Directory(
+                  '${_saveRoot!}/${parts.sublist(0, parts.length - 1).join('/')}');
+              if (!subDir.existsSync()) {
+                subDir.createSync(recursive: true);
+              }
+            }
+          }
+        } catch (_) {}
+      }
+      _pendingFiles.clear();
+    }
+  }
+
+  void _setFiles(Map<String, dynamic> payload) {
+    _pendingFiles = (payload['files'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+    Logger.log('[RECV] _setFiles: ${_pendingFiles.length} files pending');
+  }
+
+  void _pause() {
+    _ackTimer?.cancel();
+    _ackTimer = null;
+    _stopProgress();
+  }
+
+  void _resume() {
+    _lastSpeedBytes = _totalBytesWritten;
+    _startProgress();
+  }
+
+  void _cancel() {
+    _cancelled = true;
+    _ackTimer?.cancel();
+    _ackTimer = null;
+    _stopProgress();
+    for (final rf in _files.values) {
+      try {
+        rf.raf.closeSync();
+      } catch (_) {}
+      try {
+        File(rf.filePath).deleteSync();
+      } catch (_) {}
+    }
+    _files.clear();
+  }
+
+  void _shutdown() {
+    _cancel();
+    _commandPort.close();
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // Frame processing (CRC32 in this Isolate)
+  // ═══════════════════════════════════════════════════════════
+
+  void _handleData(Map<String, dynamic> payload) {
+    if (_cancelled || _transferId == null) return;
+
+    final rawBytes = payload['rawBytes'] as Uint8List;
+
+    try {
+      final frame = FlpFrame.parse(rawBytes); // CRC32 runs here
+
+      if (frame.type == FlpMessageType.fileMeta) {
+        _handleFileMeta(frame);
+      } else if (frame.type == FlpMessageType.fileData) {
+        _handleFileData(frame);
+      }
+    } catch (e) {
+      _sendEvent('error', {
+        'transferId': _transferId,
+        'message': 'Frame parse failed: $e',
+      });
+      _cancel();
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // FILE_META (FLP v1.2 §8.1)
+  // ═══════════════════════════════════════════════════════════
+
+  void _handleFileMeta(FlpFrame frame) {
+    if (_cancelled) return;
+
+    try {
+      final json = jsonDecode(utf8.decode(frame.payload)) as Map<String, dynamic>;
+      final fileId = json['fileId'] as String;
+      final relativePath = (json['relativePath'] as String).replaceAll('\\', '/');
+      final size = json['size'] as int;
+      final chunkSize = json['chunkSize'] as int? ?? 1048576;
+
+      Logger.log('[RECV] handleFileMeta: transferId=$_transferId fileId=$fileId path=$relativePath size=$size');
+
+      if (_files.containsKey(fileId)) {
+        Logger.log('[RECV] handleFileMeta: skipping duplicate fileId=$fileId');
+        return;
+      }
+
+      // Ensure save root exists
+      final rootDir = Directory(_saveRoot!);
+      if (!rootDir.existsSync()) {
+        rootDir.createSync(recursive: true);
+      }
+
+      // Build save path: saveRoot/relativePath
+      final parts = relativePath.split('/');
+      if (parts.length > 1) {
+        final subDir = Directory('${_saveRoot!}/${parts.sublist(0, parts.length - 1).join('/')}');
+        if (!subDir.existsSync()) {
+          subDir.createSync(recursive: true);
+        }
+      }
+
+      final filePath = '${_saveRoot!}/$relativePath';
+      final raf = File(filePath).openSync(mode: FileMode.write);
+
+      _files[fileId] = _ReceivingFile(
+        fileId: fileId,
+        relativePath: relativePath,
+        size: size,
+        chunkSize: chunkSize,
+        raf: raf,
+        filePath: filePath,
+      );
+
+      _pendingSize += size;
+      _startProgress();
+
+      _sendEvent('file_meta_received', {
+        'transferId': _transferId,
+        'fileId': fileId,
+        'relativePath': relativePath,
+        'size': size,
+      });
+    } catch (e, stack) {
+      Logger.log('[RECV] handleFileMeta FAILED: $e\n$stack');
+      _sendEvent('error', {
+        'transferId': _transferId,
+        'message': 'FILE_META failed: $e',
+      });
+      _cancel();
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // FILE_DATA — sync disk write in background Isolate
+  // ═══════════════════════════════════════════════════════════
+
+  void _handleFileData(FlpFrame frame) {
+    if (_cancelled) return;
+
+    try {
+      final buffer = ByteData.sublistView(frame.payload);
+      int pos = 0;
+
+      // transferId (16 B)
+      pos += 16;
+
+      // fileId (16 B)
+      final fileId = _readUuid(buffer, pos);
+      pos += 16;
+
+      // chunkIndex (4 B) — skip
+      pos += 4;
+
+      // offset (8 B)
+      final offset = buffer.getUint64(pos, Endian.big);
+      pos += 8;
+
+      // dataLength (4 B)
+      final dataLength = buffer.getUint32(pos, Endian.big);
+      pos += 4;
+
+      final rf = _files[fileId];
+      if (rf == null) {
+        Logger.log('[RECV] Unknown fileId in FILE_DATA: $fileId');
+        return;
+      }
+
+      // Sync write — safe here in background Isolate
+      rf.raf.setPositionSync(offset);
+      rf.raf.writeFromSync(frame.payload, pos, pos + dataLength);
+
+      rf.bytesWritten += dataLength;
+      _totalBytesWritten += dataLength;
+
+      _scheduleAck(fileId);
+      _updateSpeed();
+
+      // Check if file is complete
+      if (rf.bytesWritten >= rf.size) {
+        Logger.log('[RECV] _handleFileData: file complete detected fileId=$fileId bytesWritten=${rf.bytesWritten} size=${rf.size} offset=$offset dataLength=$dataLength');
+        _onFileComplete(fileId);
+      }
+    } catch (e) {
+      _sendEvent('error', {
+        'transferId': _transferId,
+        'message': 'FILE_DATA write failed: $e',
+      });
+      _sendTransferComplete(false);
+      _cancel();
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // ACK scheduling (4 MB batch / 200 ms timer)
+  // ═══════════════════════════════════════════════════════════
+
+  void _scheduleAck(String fileId) {
+    if (_totalBytesWritten - _lastAckBytes >= _ackBatchBytes) {
+      Logger.log('[RECV] _scheduleAck: volume trigger, _sendAck fileId=$fileId bytesSinceLast=${_totalBytesWritten - _lastAckBytes}');
+      _sendAck(fileId);
+      _lastAckBytes = _totalBytesWritten;
+      _ackTimer?.cancel();
+      _ackTimer = null;
+      return;
+    }
+    if (_ackTimer == null) {
+      Logger.log('[RECV] _scheduleAck: timer created fileId=$fileId bytesSinceLast=${_totalBytesWritten - _lastAckBytes}');
+    }
+    _ackTimer ??= Timer(_ackInterval, () {
+      Logger.log('[RECV] _scheduleAck: timer fired, _sendAck fileId=$fileId bytesSinceLast=${_totalBytesWritten - _lastAckBytes}');
+      _sendAck(fileId);
+      _lastAckBytes = _totalBytesWritten;
+      _ackTimer = null;
+    });
+  }
+
+  void _sendAck(String fileId) {
+    final rf = _files[fileId];
+    if (rf == null) return;
+
+    Logger.log('[RECV] _sendAck: fileId=$fileId ackOffset=${rf.bytesWritten} totalBytes=$_totalBytesWritten pendingSize=$_pendingSize');
+    final ackPayload = utf8.encode(jsonEncode({
+      'transferId': _transferId,
+      'fileId': fileId,
+      'ackOffset': rf.bytesWritten,
+      'receivedRanges': [
+        [0, rf.bytesWritten]
+      ],
+    }));
+    final frame = FlpFrame(type: FlpMessageType.fileAck, payload: Uint8List.fromList(ackPayload));
+    _sendFrameToUi(frame);
+  }
+
+  void _onFileComplete(String fileId) {
+    final rf = _files[fileId];
+    if (rf == null) return;
+
+    Logger.log('[RECV] _onFileComplete: fileId=$fileId bytesWritten=${rf.bytesWritten} size=${rf.size} totalWritten=$_totalBytesWritten pendingSize=$_pendingSize');
+    Logger.flushSync(); // Ensure logs survive Isolate exit
+
+    // Send final ACK before cancelling the timer — the last batch (< 4MB)
+    // may not have triggered the volume threshold or timer yet, and the
+    // sender needs these bytes to reach 100% progress.
+    _sendAck(fileId);
+
+    _ackTimer?.cancel();
+    _ackTimer = null;
+
+    try {
+      rf.raf.closeSync();
+    } catch (_) {}
+
+    final completePayload = utf8.encode(jsonEncode({
+      'transferId': _transferId,
+      'fileId': fileId,
+      'success': true,
+    }));
+    final frame = FlpFrame(type: FlpMessageType.fileComplete, payload: Uint8List.fromList(completePayload));
+    _sendFrameToUi(frame);
+
+    _sendEvent('file_complete', {
+      'transferId': _transferId,
+      'fileId': fileId,
+      'relativePath': rf.relativePath,
+      'success': true,
+    });
+
+    // Check if all files are done
+    final allDone = _files.values.every((f) => f.bytesWritten >= f.size);
+    if (allDone) {
+      _stopProgress();
+      _sendTransferComplete(true);
+    }
+  }
+
+  void _sendTransferComplete(bool success) {
+    Logger.log('[RECV] _sendTransferComplete: success=$success totalWritten=$_totalBytesWritten pendingSize=$_pendingSize files=${_files.length}');
+    Logger.flushSync(); // Ensure logs survive Isolate exit
+    final payload = utf8.encode(jsonEncode({
+      'transferId': _transferId,
+      'success': success,
+      'failedFiles': _files.values.where((f) => f.bytesWritten < f.size).length,
+    }));
+    final frame = FlpFrame(type: FlpMessageType.transferComplete, payload: Uint8List.fromList(payload));
+    _sendFrameToUi(frame);
+
+    _sendEvent('transfer_complete', {
+      'transferId': _transferId,
+      'success': success,
+      'totalWritten': _totalBytesWritten,
+    });
+  }
+
+  /// Send a frame's raw bytes to the UI Isolate for socket write
+  void _sendFrameToUi(FlpFrame frame) {
+    _uiPort.send({
+      'type': 'ack_frame',
+      'data': {
+        'transferId': _transferId,
+        'frameBytes': frame.toBytes(),
+      },
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // Speed tracking (1 s samples, 6 s sliding window)
+  // ═══════════════════════════════════════════════════════════
+
+  void _updateSpeed() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (_lastSpeedTime == 0) {
+      _lastSpeedTime = now;
+      _lastSpeedBytes = _totalBytesWritten;
+      return;
+    }
+
+    final deltaMs = now - _lastSpeedTime;
+    if (deltaMs >= 1000) {
+      final deltaBytes = _totalBytesWritten - _lastSpeedBytes;
+      final speed = deltaBytes / (deltaMs / 1000.0);
+      _speedSamples.add(speed);
+
+      while (_speedSamples.length > 6) {
+        _speedSamples.removeAt(0);
+      }
+
+      _lastSpeedTime = now;
+      _lastSpeedBytes = _totalBytesWritten;
+    }
+
+    _notifyProgress();
+  }
+
+  double _avgSpeed() {
+    if (_speedSamples.isEmpty) return 0;
+    return _speedSamples.reduce((a, b) => a + b) / _speedSamples.length;
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // Progress (debounced ≤ 10 Hz)
+  // ═══════════════════════════════════════════════════════════
+
+  void _notifyProgress() {
+    _progressTimer ??= Timer(const Duration(milliseconds: 100), () {
+      _progressTimer = null;
+      if (_cancelled) return;
+      final avg = _avgSpeed();
+      if (avg > _peakSpeed) _peakSpeed = avg;
+      _sendEvent('progress', {
+        'transferId': _transferId,
+        'bytesWritten': _totalBytesWritten,
+        'totalSize': _pendingSize,
+        'speed': avg,
+        'peakSpeed': _peakSpeed,
+      });
+    });
+  }
+
+  void _startProgress() {
+    _lastSpeedTime = DateTime.now().millisecondsSinceEpoch;
+    _lastSpeedBytes = _totalBytesWritten;
+  }
+
+  void _stopProgress() {
+    _progressTimer?.cancel();
+    _progressTimer = null;
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // Helpers
+  // ═══════════════════════════════════════════════════════════
+
+  static String _readUuid(ByteData buffer, int offset) {
+    final sb = StringBuffer();
+    for (var i = 0; i < 16; i++) {
+      sb.write(buffer.getUint8(offset + i).toRadixString(16).padLeft(2, '0'));
+    }
+    final hex = sb.toString();
+    return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}';
+  }
+
+  /// Isolate entry point
+  static void entry(SendPort uiPort) {
+    runZonedGuarded(() {
+      try {
+        Logger.init(suffix: '-RecvEngine');
+      } catch (_) {}
+      try {
+        ReceiveEngine(uiPort);
+      } catch (e, stack) {
+        Logger.log('[RECV] FATAL: engine init failed: $e\n$stack');
+        try {
+          uiPort.send({
+            'type': 'error',
+            'data': {'message': 'Receive engine init failed: $e'},
+          });
+        } catch (_) {}
+      }
+    }, (error, stack) {
+      Logger.log('[RECV] UNHANDLED ERROR (zone): $error\n$stack');
+      try {
+        uiPort.send({
+          'type': 'error',
+          'data': {'message': 'Receive engine unhandled error: $error'},
+        });
+      } catch (_) {}
+    });
+  }
+}
+
+class _ReceivingFile {
+  final String fileId;
+  final String relativePath;
+  final int size;
+  final int chunkSize;
+  final RandomAccessFile raf;
+  final String filePath;
+  int bytesWritten = 0;
+
+  _ReceivingFile({
+    required this.fileId,
+    required this.relativePath,
+    required this.size,
+    required this.chunkSize,
+    required this.raf,
+    required this.filePath,
+  });
+}

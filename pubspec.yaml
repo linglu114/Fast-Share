@@ -1,0 +1,62 @@
+name: fastshare
+description: "局域网文件传输应用 - FastShare"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.5
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # 状态管理
+  flutter_riverpod: ^2.4.0
+
+  # 网络发现
+  multicast_dns: ^0.3.2
+
+  # 本地数据库
+  sqflite: ^2.3.0
+  sqflite_common_ffi: ^2.3.0
+  path_provider: ^2.1.0
+
+  # 文件选择
+  file_picker: ^11.0.0
+
+  # 分享接收 (Android)
+  receive_sharing_intent: ^1.8.0
+
+  # 桌面拖拽 (Windows)
+  desktop_drop: ^0.7.0
+
+  # 二维码
+  qr_flutter: ^4.1.0
+  mobile_scanner: ^7.0.0
+
+
+  # 唯一 ID
+  uuid: ^4.2.0
+
+  # 路径工具
+  path: ^1.8.0
+
+  # 网络信息
+  network_info_plus: ^6.0.0
+
+  # 加密
+  crypto: ^3.0.3
+
+  # 键值持久化
+  shared_preferences: ^2.2.0
+
+  # UI 图标
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
