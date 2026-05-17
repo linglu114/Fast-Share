@@ -29,6 +29,7 @@ class _FastShareAppState extends ConsumerState<FastShareApp> {
     const SettingsPage(),
   ];
 
+  final _navigatorKey = GlobalKey<NavigatorState>();
   TransferOffer? _lastShownOffer;
 
   @override
@@ -41,7 +42,7 @@ class _FastShareAppState extends ConsumerState<FastShareApp> {
       _lastShownOffer = pendingOffer;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && ref.read(pendingOfferProvider) == pendingOffer) {
-          _showReceiveConfirmDialog(context, pendingOffer);
+          _showReceiveConfirmDialog(pendingOffer);
         }
       });
     }
@@ -56,6 +57,7 @@ class _FastShareAppState extends ConsumerState<FastShareApp> {
     }
 
     return MaterialApp(
+      navigatorKey: _navigatorKey,
       title: 'FastShare',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
@@ -103,23 +105,29 @@ class _FastShareAppState extends ConsumerState<FastShareApp> {
     );
   }
 
-  void _showReceiveConfirmDialog(BuildContext context, TransferOffer offer) {
+  void _showReceiveConfirmDialog(TransferOffer offer) {
+    final navigator = _navigatorKey.currentState;
+    if (navigator == null) return;
+
     final onlineDevices = ref.read(onlineDevicesProvider);
-    final sender = onlineDevices.where((d) => d.deviceId == offer.senderDeviceId).firstOrNull;
+    final sender = onlineDevices
+        .where((d) => d.deviceId == offer.senderDeviceId)
+        .firstOrNull;
 
     showDialog<bool>(
-      context: context,
+      context: navigator.context,
       barrierDismissible: false,
       builder: (ctx) => ReceiveConfirmDialog(
-        sender: sender ?? Device(
-          deviceId: offer.senderDeviceId,
-          name: offer.senderDeviceName ?? offer.senderDeviceId,
-          ip: '',
-          port: 0,
-          platform: 'unknown',
-          protocolVersion: 1,
-          lastSeen: DateTime.now(),
-        ),
+        sender: sender ??
+            Device(
+              deviceId: offer.senderDeviceId,
+              name: offer.senderDeviceName ?? offer.senderDeviceId,
+              ip: '',
+              port: 0,
+              platform: 'unknown',
+              protocolVersion: 1,
+              lastSeen: DateTime.now(),
+            ),
         files: offer.files,
         totalSize: offer.totalSize,
         folderMode: offer.folderMode,
