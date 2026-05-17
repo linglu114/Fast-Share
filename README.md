@@ -123,4 +123,4 @@ await tool.cleanup();
 
 ## 许可证
 
-MIT
+GNU General Public License v3.0 — 详见 [LICENSE](LICENSE)
