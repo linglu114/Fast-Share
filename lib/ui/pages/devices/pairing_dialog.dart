@@ -89,39 +89,29 @@ class _PairingPinDialogState extends State<PairingPinDialog> {
             color: Theme.of(context).colorScheme.primary,
           ),
           const SizedBox(width: 8),
-          Flexible(
-            child: Text(
-              widget.isConnector ? '设备配对' : '配对请求',
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
+          Text(widget.isConnector ? '设备配对' : '配对请求'),
         ],
       ),
-      content: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 300),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              widget.isConnector
-                  ? '与 "${widget.deviceName}" 配对'
-                  : '"${widget.deviceName}" 想要与你配对',
-              style: const TextStyle(fontSize: 15),
-              overflow: TextOverflow.ellipsis,
-              maxLines: 2,
-            ),
-            const SizedBox(height: 16),
-            Text(
-              '双方应显示相同的验证码：',
-              style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
-            ),
-            const SizedBox(height: 12),
-            _PinDisplay(pairCode: widget.pairCode),
-            const SizedBox(height: 12),
-            _buildStatusLine(),
-          ],
-        ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            widget.isConnector
+                ? '与 "${widget.deviceName}" 配对'
+                : '"${widget.deviceName}" 想要与你配对',
+            style: const TextStyle(fontSize: 15),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            '双方应显示相同的验证码：',
+            style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+          ),
+          const SizedBox(height: 12),
+          _PinDisplay(pairCode: widget.pairCode),
+          const SizedBox(height: 12),
+          _buildStatusLine(),
+        ],
       ),
       actions: _buildActions(),
     );
