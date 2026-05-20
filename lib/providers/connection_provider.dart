@@ -1,9 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:path_provider/path_provider.dart';
 import '../models/device.dart';
 import '../models/transfer_task.dart';
 import '../models/history_record.dart';
@@ -206,42 +204,11 @@ class ConnectionNotifier extends Notifier<Map<String, bool>> {
     ref.read(pendingOfferProvider.notifier).state = offer;
   }
 
-  Future<void> acceptPendingOffer() async {
+  void acceptPendingOffer() {
     final offer = ref.read(pendingOfferProvider);
     if (offer == null) return;
     Logger.log('[CN] acceptPendingOffer: transferId=${offer.transferId}');
-    String savePath = ref.read(downloadPathProvider);
-
-    // On Android, verify the save path is writable. Shared storage directories
-    // like /storage/emulated/0/Download require permissions that may not be
-    // granted. Fall back to app-specific external storage if needed.
-    if (Platform.isAndroid) {
-      try {
-        final dir = Directory(savePath);
-        if (!dir.existsSync()) {
-          dir.createSync(recursive: true);
-        }
-        // Write test to verify we can actually write here
-        final testFile = File('${savePath}/.fastshare_test');
-        testFile.writeAsStringSync('test');
-        testFile.deleteSync();
-      } catch (_) {
-        // Cannot write to configured path — fall back to app-specific storage
-        try {
-          final extDir = await getExternalStorageDirectory();
-          if (extDir != null) {
-            savePath = '${extDir.path}/FastShare';
-            Logger.log('[CN] acceptPendingOffer: fallback to $savePath');
-          }
-        } catch (_) {
-          try {
-            final docDir = await getApplicationDocumentsDirectory();
-            savePath = '${docDir.path}/FastShare';
-            Logger.log('[CN] acceptPendingOffer: fallback to $savePath');
-          } catch (_) {}
-        }
-      }
-    }
+    final savePath = ref.read(downloadPathProvider);
 
     _manager?.acceptTransfer(
       offer.senderDeviceId,

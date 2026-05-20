@@ -50,6 +50,9 @@ dependencies:
   # 键值持久化
   shared_preferences: ^2.2.0
 
+  # 权限请求 (Android)
+  permission_handler: ^11.3.0
+
   # UI 图标
   cupertino_icons: ^1.0.8
 

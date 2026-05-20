@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import 'storage/database.dart';
@@ -12,6 +13,11 @@ import 'app.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Android: 首次启动时就申请存储权限，确保下载目录可写
+  if (Platform.isAndroid) {
+    await _requestStoragePermissions();
+  }
 
   // 获取可写目录初始化日志：移动端用临时目录，桌面端用系统 TEMP
   String? logDir;
@@ -51,4 +57,37 @@ void main() async {
       child: const FastShareApp(),
     ),
   );
+}
+
+/// Android 首次启动时申请存储权限，确保下载目录（/storage/emulated/0/Download）可写
+Future<void> _requestStoragePermissions() async {
+  // 从 Platform.operatingSystemVersion 解析 API level
+  // 格式如 "Android 10 (API 29)"
+  final sdkInt = _parseAndroidSdkInt();
+
+  if (sdkInt >= 30) {
+    // Android 11+：MANAGE_EXTERNAL_STORAGE 是唯一有效的方式
+    final status = await Permission.manageExternalStorage.status;
+    if (!status.isGranted) {
+      await Permission.manageExternalStorage.request();
+    }
+  } else {
+    // Android 10 及以下：READ/WRITE_EXTERNAL_STORAGE
+    final status = await Permission.storage.status;
+    if (!status.isGranted) {
+      await Permission.storage.request();
+    }
+  }
+}
+
+int _parseAndroidSdkInt() {
+  try {
+    final versionStr = Platform.operatingSystemVersion;
+    // e.g. "Android 10 (API 29)" or "Android 13 (API 33)"
+    final match = RegExp(r'API\s*(\d+)').firstMatch(versionStr);
+    if (match != null) {
+      return int.parse(match.group(1)!);
+    }
+  } catch (_) {}
+  return 29;
 }
