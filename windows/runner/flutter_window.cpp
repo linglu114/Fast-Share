@@ -1,6 +1,5 @@
 ﻿#include "flutter_window.h"
 
-#include <flutter_windows.h>
 #include <optional>
 
 #include "flutter/generated_plugin_registrant.h"
@@ -8,9 +7,10 @@
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
 
-void FlutterWindow::SetFixedSize(int width, int height) {
+void FlutterWindow::SetFixedSize(int width, int height, double dpiScale) {
   fixed_width_ = width;
   fixed_height_ = height;
+  dpi_scale_ = dpiScale;
 }
 
 FlutterWindow::~FlutterWindow() {}
@@ -22,11 +22,7 @@ bool FlutterWindow::OnCreate() {
 
   RECT frame = GetClientArea();
 
-  // Store DPI scale for use in WM_WINDOWPOSCHANGING / WM_DPICHANGED
   HWND hwnd = GetHandle();
-  HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-  UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
-  dpi_scale_ = dpi / 96.0;
 
   // Remove resize border and maximize button for fixed-size window
   LONG_PTR style = GetWindowLongPtr(hwnd, GWL_STYLE);

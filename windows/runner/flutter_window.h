@@ -15,8 +15,8 @@ class FlutterWindow : public Win32Window {
   explicit FlutterWindow(const flutter::DartProject& project);
   virtual ~FlutterWindow();
 
-  // Set the fixed window size used for WM_GETMINMAXINFO constraints.
-  void SetFixedSize(int width, int height);
+  // Set the fixed window size and DPI scale. Must be called before Create().
+  void SetFixedSize(int width, int height, double dpiScale);
 
  protected:
   // Win32Window:

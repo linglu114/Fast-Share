@@ -30,17 +30,17 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   // 9:20 ratio window.
   // SystemParametersInfo returns physical pixels; convert to logical
   // (96 DPI) since Win32Window::Create() scales the passed size by DPI.
+  HDC hdc = GetDC(nullptr);
+  int dpi = GetDeviceCaps(hdc, LOGPIXELSX);
+  ReleaseDC(nullptr, hdc);
+  double dpiScale = dpi / 96.0;
+
   RECT workArea;
   int width = 400;
   int height = 889;  // 400 * 20/9 fallback
   if (::SystemParametersInfo(SPI_GETWORKAREA, 0, &workArea, 0)) {
-    HDC hdc = GetDC(nullptr);
-    int dpi = GetDeviceCaps(hdc, LOGPIXELSX);
-    ReleaseDC(nullptr, hdc);
-    double scale = dpi / 96.0;
-
-    int logicalW = static_cast<int>((workArea.right - workArea.left) / scale);
-    int logicalH = static_cast<int>((workArea.bottom - workArea.top) / scale);
+    int logicalW = static_cast<int>((workArea.right - workArea.left) / dpiScale);
+    int logicalH = static_cast<int>((workArea.bottom - workArea.top) / dpiScale);
 
     // Height is the primary constraint (screens are usually wider than tall).
     // At 9:20 ratio, width = height * 9/20.
@@ -58,7 +58,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
       width = height * 9 / 20;
     }
   }
-  window.SetFixedSize(width, height);
+  window.SetFixedSize(width, height, dpiScale);
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(width, height);
   if (!window.Create(L"fastshare", origin, size)) {
