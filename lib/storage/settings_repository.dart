@@ -79,7 +79,7 @@ class SettingsRepository {
       _prefs.setBool(_keyThermalProtection, value);
 
   // 服务端口
-  int get serverPort => _prefs.getInt(_keyServerPort) ?? 45678;
+  int get serverPort => _prefs.getInt(_keyServerPort) ?? 34568;
   Future<bool> setServerPort(int port) =>
       _prefs.setInt(_keyServerPort, port);
 

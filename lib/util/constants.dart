@@ -1,6 +1,6 @@
 const int largeFileThreshold = 100 * 1024 * 1024; // 100MB
 const int chunkSize = 1024 * 1024; // 1MB
-const int defaultServerPort = 45678;
+const int defaultServerPort = 34568;
 const int largeFileThresholdInMB = 100;
 
 const int ioBufferSize = 256 * 1024; // 256KB

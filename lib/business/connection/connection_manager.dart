@@ -90,7 +90,7 @@ class ConnectionManager {
     required this.localDeviceId,
     required this.localDeviceName,
     required this.platform,
-    this.port = 45678,
+    this.port = 34568,
   });
 
   /// Update the port used in discovery broadcasts after TCP server binds.

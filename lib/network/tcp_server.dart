@@ -14,7 +14,7 @@ class TcpServer {
 
   Stream<TcpConnection> get onConnection => _connectionController.stream;
 
-  TcpServer({this.port = 45678});
+  TcpServer({this.port = 34568});
 
   /// 启动服务器。port=0 时由系统分配可用端口。
   Future<void> start() async {
