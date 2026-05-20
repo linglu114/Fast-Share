@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 /// 配对 PIN 码显示对话框
 ///
@@ -110,17 +109,6 @@ class _PairingPinDialogState extends State<PairingPinDialog> {
           const SizedBox(height: 12),
           _PinDisplay(pairCode: widget.pairCode),
           const SizedBox(height: 12),
-          TextButton.icon(
-            icon: const Icon(Icons.copy, size: 16),
-            label: const Text('复制验证码', style: TextStyle(fontSize: 12)),
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: widget.pairCode));
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('验证码已复制')),
-              );
-            },
-          ),
-          const SizedBox(height: 8),
           _buildStatusLine(),
         ],
       ),
