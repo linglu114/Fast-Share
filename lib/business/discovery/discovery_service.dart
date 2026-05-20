@@ -76,7 +76,9 @@ class DiscoveryService {
       _socket = await RawDatagramSocket.bind(addr, _discoveryPort,
           reuseAddress: true);
       _socket!.broadcastEnabled = true;
-    } catch (_) {
+    } catch (e) {
+      // ignore: avoid_print
+      print('[DiscoveryService] _bind failed (addr=$bindAddress): $e');
       _socket = null;
     }
   }
@@ -153,8 +155,9 @@ class DiscoveryService {
       }
 
       _devicesController.add(_devices.values.toList());
-    } catch (_) {
-      // 解析失败静默处理
+    } catch (e) {
+      // ignore: avoid_print
+      print('[DiscoveryService] _onData parse error: $e');
     }
   }
 
@@ -214,8 +217,9 @@ class DiscoveryService {
           InternetAddress(addr),
           _discoveryPort,
         );
-      } catch (_) {
-        // 单个地址广播失败，继续尝试下一个
+      } catch (e) {
+        // ignore: avoid_print
+        print('[DiscoveryService] broadcast to $addr failed: $e');
       }
     }
   }

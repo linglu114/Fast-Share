@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/device.dart';
 import '../business/discovery/discovery_service.dart';
+import '../util/logger.dart';
 import 'settings_provider.dart';
 
 /// 在线设备列表
@@ -53,8 +54,13 @@ class DiscoveryNotifier extends Notifier<List<Device>> {
   }
 
   void _startDiscovery() {
+    // 防止 build() 多次调用导致多个 UDP socket 并存、互相抢包
+    if (_service != null) return;
+
     final settings = ref.read(settingsRepositoryProvider);
     final localDevice = ref.read(localDeviceProvider);
+
+    Logger.log('[DISCOVERY] Creating service: deviceId=${localDevice.deviceId} port=${settings.serverPort}');
 
     _service = DiscoveryService(
       localDeviceId: localDevice.deviceId,
@@ -80,6 +86,7 @@ class DiscoveryNotifier extends Notifier<List<Device>> {
     Future(() async {
       await _resolveLocalIp();
       final bindAddr = localIp;
+      Logger.log('[DISCOVERY] Resolved IPs: $_allLocalIps, bindAddr=$bindAddr');
       await _service!.start(bindAddress: bindAddr);
       if (bindAddr != null) {
         _service!.updateBroadcastAddresses(_allLocalIps);
@@ -119,7 +126,9 @@ class DiscoveryNotifier extends Notifier<List<Device>> {
       if (manual == null || manual.isEmpty) {
         state = [...state];
       }
-    } catch (_) {}
+    } catch (e) {
+      Logger.log('[DISCOVERY] _resolveLocalIp failed: $e');
+    }
   }
 
   /// 为 IP 地址打分，局域网地址得分更高
@@ -161,6 +170,7 @@ class DiscoveryNotifier extends Notifier<List<Device>> {
     _downSub?.cancel();
     _service?.stop();
     _service?.dispose();
+    _service = null;
     _deviceUpController.close();
     _deviceDownController.close();
   }
