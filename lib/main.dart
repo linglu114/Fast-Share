@@ -30,6 +30,11 @@ void main() async {
   final prefs = await SharedPreferences.getInstance();
   final settingsRepo = SettingsRepository(prefs);
 
+  // 迁移旧的默认端口 45678 → 34568
+  if (settingsRepo.serverPort == 45678) {
+    await settingsRepo.setServerPort(34568);
+  }
+
   // 生成并持久化设备 ID（首次启动）
   if (settingsRepo.deviceId == null) {
     await settingsRepo.setDeviceId(const Uuid().v4());
