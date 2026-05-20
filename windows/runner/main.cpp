@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <flutter/dart_project.h>
 #include <flutter/flutter_view_controller.h>
 #include <windows.h>
@@ -25,8 +26,20 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   project.set_dart_entrypoint_arguments(std::move(command_line_arguments));
 
   FlutterWindow window(project);
+
+  // Scale window to a phone-like proportion of the screen work area
+  // so it looks balanced on any resolution (low-DPI to 4K).
+  RECT workArea;
+  int width = 400;
+  int height = 720;
+  if (::SystemParametersInfo(SPI_GETWORKAREA, 0, &workArea, 0)) {
+    int screenW = workArea.right - workArea.left;
+    int screenH = workArea.bottom - workArea.top;
+    width = std::max(400, std::min(static_cast<int>(screenW * 0.30), 500));
+    height = std::max(640, std::min(static_cast<int>(screenH * 0.60), 820));
+  }
   Win32Window::Point origin(10, 10);
-  Win32Window::Size size(400, 720);
+  Win32Window::Size size(width, height);
   if (!window.Create(L"fastshare", origin, size)) {
     return EXIT_FAILURE;
   }
