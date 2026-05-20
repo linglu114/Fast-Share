@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -88,19 +89,9 @@ class _DevicesPageState extends ConsumerState<DevicesPage>
             },
           ),
           IconButton(
-            icon: const Icon(Icons.qr_code_scanner),
-            tooltip: '扫码连接',
-            onPressed: () {},
-          ),
-          IconButton(
             icon: const Icon(Icons.qr_code),
-            tooltip: '显示二维码 / 短码',
-            onPressed: () => _showLocalQrCode(context, ref),
-          ),
-          IconButton(
-            icon: const Icon(Icons.dialpad),
-            tooltip: '输入短码',
-            onPressed: () => _showShortCodeInput(context, ref),
+            tooltip: '二维码 / 短码 / 扫码',
+            onPressed: () => _showUnifiedQrSheet(context, ref),
           ),
         ],
       ),
@@ -379,93 +370,53 @@ class _DevicesPageState extends ConsumerState<DevicesPage>
     }
   }
 
-  // ═══ 二维码 + 短码 ═══
+  // ═══ 统一二维码 / 短码 / 扫码 ═══
 
-  void _showLocalQrCode(BuildContext context, WidgetRef ref) {
+  void _showUnifiedQrSheet(BuildContext context, WidgetRef ref) {
     final notifier = ref.read(onlineDevicesProvider.notifier);
-    _QrCodeDialog.show(context, ref, notifier);
-  }
-
-  void _showShortCodeInput(BuildContext context, WidgetRef ref) {
-    final codeController = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('输入短码连接'),
-        content: TextField(
-          controller: codeController,
-          autofocus: true,
-          maxLength: 6,
-          keyboardType: TextInputType.number,
-          textAlign: TextAlign.center,
-          style: const TextStyle(fontSize: 24, letterSpacing: 4),
-          decoration: const InputDecoration(
-            hintText: '6 位短码',
-            counterText: '',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final code = codeController.text.trim();
-              if (code.length != 6) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('请输入完整的 6 位短码')),
-                );
-                return;
-              }
-              Navigator.pop(ctx);
-
-              final onlineDevices = ref.read(onlineDevicesProvider);
-              Device? match;
-              for (final d in onlineDevices) {
-                if (generateShortCode(d.deviceId) == code) {
-                  match = d;
-                  break;
-                }
-              }
-
-              if (match != null) {
-                _connectToDevice(context, ref, match);
-              } else {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                      content: Text('未找到匹配的设备，请确认短码正确且设备在线')),
-                );
-              }
-            },
-            child: const Text('连接'),
-          ),
-        ],
-      ),
+    _UnifiedQrSheet.show(
+      context,
+      ref,
+      notifier,
+      onDeviceFound: (device) => _connectToDevice(context, ref, device),
     );
   }
 }
 
-// ═══ QR 码弹窗组件 ═══
+// ═══ 统一二维码弹窗 (扫码 / 短码 / 本机码 三合一) ═══
 
-class _QrCodeDialog extends StatefulWidget {
+class _UnifiedQrSheet extends StatefulWidget {
   final WidgetRef ref;
   final DiscoveryNotifier notifier;
+  final void Function(Device device) onDeviceFound;
 
-  const _QrCodeDialog({required this.ref, required this.notifier});
+  const _UnifiedQrSheet({
+    required this.ref,
+    required this.notifier,
+    required this.onDeviceFound,
+  });
 
-  static void show(BuildContext context, WidgetRef ref, DiscoveryNotifier notifier) {
+  static void show(
+    BuildContext context,
+    WidgetRef ref,
+    DiscoveryNotifier notifier, {
+    required void Function(Device device) onDeviceFound,
+  }) {
     showDialog(
       context: context,
-      builder: (_) => _QrCodeDialog(ref: ref, notifier: notifier),
+      builder: (_) => _UnifiedQrSheet(
+        ref: ref,
+        notifier: notifier,
+        onDeviceFound: onDeviceFound,
+      ),
     );
   }
 
   @override
-  State<_QrCodeDialog> createState() => _QrCodeDialogState();
+  State<_UnifiedQrSheet> createState() => _UnifiedQrSheetState();
 }
 
-class _QrCodeDialogState extends State<_QrCodeDialog> {
+class _UnifiedQrSheetState extends State<_UnifiedQrSheet> {
   late String _currentIp;
 
   @override
@@ -504,20 +455,15 @@ class _QrCodeDialogState extends State<_QrCodeDialog> {
               if (i == allIps.length) {
                 return ListTile(
                   leading: Icon(Icons.auto_mode,
-                      color:
-                          (widget.notifier.allDetectedIps.isNotEmpty &&
-                                  _currentIp == widget.notifier.allDetectedIps.first)
-                              ? Theme.of(ctx).colorScheme.primary
-                              : null),
+                      color: (widget.notifier.allDetectedIps.isNotEmpty &&
+                              _currentIp == widget.notifier.allDetectedIps.first)
+                          ? Theme.of(ctx).colorScheme.primary
+                          : null),
                   title: const Text('自动检测'),
-                  subtitle: Text(allIps.isNotEmpty
-                      ? '当前自动: ${allIps.first}'
-                      : '无可用'),
+                  subtitle: Text(allIps.isNotEmpty ? '当前自动: ${allIps.first}' : '无可用'),
                   onTap: () {
                     widget.notifier.selectLocalIp(null);
-                    setState(() {
-                      _currentIp = widget.notifier.localIp ?? '未知';
-                    });
+                    setState(() { _currentIp = widget.notifier.localIp ?? '未知'; });
                     Navigator.pop(ctx);
                   },
                 );
@@ -529,17 +475,13 @@ class _QrCodeDialogState extends State<_QrCodeDialog> {
               return ListTile(
                 leading: Icon(
                   isSelected ? Icons.check_circle : Icons.circle_outlined,
-                  color: isSelected
-                      ? Theme.of(ctx).colorScheme.primary
-                      : null,
+                  color: isSelected ? Theme.of(ctx).colorScheme.primary : null,
                 ),
                 title: Text(ip),
                 subtitle: Text(isAutoBest ? '自动检测 · 推荐' : '手动选择'),
                 onTap: () {
                   widget.notifier.selectLocalIp(ip);
-                  setState(() {
-                    _currentIp = ip;
-                  });
+                  setState(() { _currentIp = ip; });
                   Navigator.pop(ctx);
                 },
               );
@@ -553,6 +495,88 @@ class _QrCodeDialogState extends State<_QrCodeDialog> {
           ),
         ],
       ),
+    );
+  }
+
+  void _onInputShortCode() {
+    final codeController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('输入短码连接'),
+        content: TextField(
+          controller: codeController,
+          autofocus: true,
+          maxLength: 6,
+          keyboardType: TextInputType.number,
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 24, letterSpacing: 4),
+          decoration: const InputDecoration(
+            hintText: '6 位短码',
+            counterText: '',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final code = codeController.text.trim();
+              if (code.length != 6) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('请输入完整的 6 位短码')),
+                );
+                return;
+              }
+              Navigator.pop(ctx); // close input dialog
+              Navigator.pop(context); // close unified sheet
+
+              final onlineDevices = widget.ref.read(onlineDevicesProvider);
+              Device? match;
+              for (final d in onlineDevices) {
+                if (generateShortCode(d.deviceId) == code) {
+                  match = d;
+                  break;
+                }
+              }
+              if (match != null) {
+                widget.onDeviceFound(match);
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('未找到匹配的设备，请确认短码正确且设备在线')),
+                );
+              }
+            },
+            child: const Text('连接'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _onScanQrCode() {
+    final isMobile = Platform.isAndroid || Platform.isIOS;
+    if (!isMobile) {
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('不支持扫码'),
+          content: const Text('扫码功能仅在移动端（Android/iOS）可用，请在电脑端使用二维码或短码连接。'),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('知道了'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+    // TODO: 移动端扫码流程 — 集成 mobile_scanner 打开摄像头扫描对方二维码
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('扫码功能开发中...')),
     );
   }
 
@@ -579,10 +603,7 @@ class _QrCodeDialogState extends State<_QrCodeDialog> {
             Row(
               children: [
                 Text('本机二维码',
-                    style: Theme.of(context)
-                        .textTheme
-                        .titleMedium
-                        ?.copyWith(fontWeight: FontWeight.w600)),
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
                 const Spacer(),
                 GestureDetector(
                   onTap: () {
@@ -592,8 +613,7 @@ class _QrCodeDialogState extends State<_QrCodeDialog> {
                     );
                   },
                   child: Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                     decoration: BoxDecoration(
                       color: Colors.blue.shade50,
                       borderRadius: BorderRadius.circular(12),
@@ -622,9 +642,7 @@ class _QrCodeDialogState extends State<_QrCodeDialog> {
               ),
             ),
             const SizedBox(height: 16),
-            Text(localDevice.name,
-                style:
-                    const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+            Text(localDevice.name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
             const SizedBox(height: 4),
             GestureDetector(
               onTap: _showIpPicker,
@@ -632,19 +650,37 @@ class _QrCodeDialogState extends State<_QrCodeDialog> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text('IP: $_currentIp · 端口: $serverPort',
-                      style: TextStyle(
-                          fontSize: 12, color: Colors.grey.shade600)),
+                      style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
                   const SizedBox(width: 4),
-                  Icon(Icons.arrow_drop_down,
-                      size: 16, color: Colors.grey.shade600),
+                  Icon(Icons.arrow_drop_down, size: 16, color: Colors.grey.shade600),
                 ],
               ),
             ),
             const SizedBox(height: 4),
             Text('让对方扫描二维码或输入上方短码即可连接',
-                style:
-                    TextStyle(fontSize: 11, color: Colors.grey.shade500)),
+                style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
             const SizedBox(height: 16),
+            // ── 整合功能按钮（短码输入 + 扫码连接）──
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _onInputShortCode,
+                    icon: const Icon(Icons.dialpad, size: 18),
+                    label: const Text('输入短码'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _onScanQrCode,
+                    icon: const Icon(Icons.qr_code_scanner, size: 18),
+                    label: const Text('扫描二维码'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
             SizedBox(
               width: double.infinity,
               child: FilledButton(
