@@ -65,6 +65,30 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  // Handle size constraints before Flutter — WM_GETMINMAXINFO must not
+  // be intercepted by Flutter's HandleTopLevelWindowProc.
+  if (message == WM_GETMINMAXINFO) {
+    MINMAXINFO* mmi = reinterpret_cast<MINMAXINFO*>(lparam);
+    mmi->ptMinTrackSize.x = fixed_width_;
+    mmi->ptMinTrackSize.y = fixed_height_;
+    mmi->ptMaxTrackSize.x = fixed_width_;
+    mmi->ptMaxTrackSize.y = fixed_height_;
+    mmi->ptMaxSize.x = fixed_width_;
+    mmi->ptMaxSize.y = fixed_height_;
+    return 0;
+  }
+
+  // Prevent Windows from changing our size during DPI transitions
+  if (message == WM_DPICHANGED) {
+    auto newRect = reinterpret_cast<RECT*>(lparam);
+    double dpiScale = static_cast<double>(LOWORD(wparam)) / 96.0;
+    SetWindowPos(hwnd, nullptr, newRect->left, newRect->top,
+                 static_cast<int>(fixed_width_ * dpiScale),
+                 static_cast<int>(fixed_height_ * dpiScale),
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+    return 0;
+  }
+
   // Give Flutter, including plugins, an opportunity to handle window messages.
   if (flutter_controller_) {
     std::optional<LRESULT> result =
@@ -79,16 +103,6 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     case WM_FONTCHANGE:
       flutter_controller_->engine()->ReloadSystemFonts();
       break;
-    case WM_GETMINMAXINFO: {
-      MINMAXINFO* mmi = reinterpret_cast<MINMAXINFO*>(lparam);
-      mmi->ptMinTrackSize.x = fixed_width_;
-      mmi->ptMinTrackSize.y = fixed_height_;
-      mmi->ptMaxTrackSize.x = fixed_width_;
-      mmi->ptMaxTrackSize.y = fixed_height_;
-      mmi->ptMaxSize.x = fixed_width_;
-      mmi->ptMaxSize.y = fixed_height_;
-      return 0;
-    }
   }
 
   return Win32Window::MessageHandler(hwnd, message, wparam, lparam);
