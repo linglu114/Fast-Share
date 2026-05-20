@@ -176,7 +176,7 @@ class _PairingPinDialogState extends State<PairingPinDialog> {
   }
 }
 
-/// PIN 数字显示组件，自适应宽度避免溢出弹窗
+/// PIN 数字显示组件，自适应宽度保证完整显示
 class _PinDisplay extends StatelessWidget {
   final String pairCode;
   const _PinDisplay({required this.pairCode});
@@ -184,15 +184,14 @@ class _PinDisplay extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final digits = pairCode.split('');
-    // Allow horizontal scrolling if the code is too wide for the dialog
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(12),
       ),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: digits.map((digit) {
