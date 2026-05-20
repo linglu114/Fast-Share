@@ -91,8 +91,7 @@ class SettingsRepository {
   // 文件下载保存路径
   static String get defaultDownloadPath {
     if (Platform.isWindows) {
-      final home = Platform.environment['USERPROFILE'] ?? 'C:\\Users\\Public';
-      return '$home\\Downloads';
+      return _getWindowsDownloadsPath();
     }
     if (Platform.isAndroid) {
       return '/storage/emulated/0/Download';
@@ -102,6 +101,40 @@ class SettingsRepository {
       return '$home/Downloads';
     }
     return '.';
+  }
+
+  /// Read the real Downloads folder path from Windows registry.
+  ///
+  /// The user may have relocated the Downloads folder via
+  /// Properties → Location, which updates:
+  ///   HKCU\...\User Shell Folders\{374DE290-123F-4565-9164-39C4925E467B}
+  static String _getWindowsDownloadsPath() {
+    try {
+      final result = Process.runSync('reg', [
+        'query',
+        r'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders',
+        '/v',
+        '{374DE290-123F-4565-9164-39C4925E467B}',
+      ]);
+      if (result.exitCode == 0) {
+        final match = RegExp(r'REG_EXPAND_SZ\s+(.+)')
+            .firstMatch(result.stdout.toString());
+        if (match != null) {
+          final path = _expandEnvVars(match.group(1)!.trim());
+          if (path.isNotEmpty) return path;
+        }
+      }
+    } catch (_) {}
+    // Fallback: try REG_SZ variant, then default location
+    final home = Platform.environment['USERPROFILE'] ?? r'C:\Users\Public';
+    return '$home\\Downloads';
+  }
+
+  /// Expand %VAR% style environment variables within a path string.
+  static String _expandEnvVars(String path) {
+    return path.replaceAllMapped(RegExp(r'%([^%]+)%'), (m) {
+      return Platform.environment[m.group(1)!] ?? m.group(0)!;
+    });
   }
 
   String get downloadPath =>
