@@ -89,28 +89,39 @@ class _PairingPinDialogState extends State<PairingPinDialog> {
             color: Theme.of(context).colorScheme.primary,
           ),
           const SizedBox(width: 8),
-          Text(widget.isConnector ? '设备配对' : '配对请求'),
+          Flexible(
+            child: Text(
+              widget.isConnector ? '设备配对' : '配对请求',
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
         ],
       ),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            widget.isConnector
-                ? '与 "${widget.deviceName}" 配对'
-                : '"${widget.deviceName}" 想要与你配对',
-            style: const TextStyle(fontSize: 15),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            '双方应显示相同的验证码：',
-            style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
-          ),
-          const SizedBox(height: 12),
-          _PinDisplay(pairCode: widget.pairCode),
-          const SizedBox(height: 12),
-          _buildStatusLine(),
-        ],
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 300),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              widget.isConnector
+                  ? '与 "${widget.deviceName}" 配对'
+                  : '"${widget.deviceName}" 想要与你配对',
+              style: const TextStyle(fontSize: 15),
+              overflow: TextOverflow.ellipsis,
+              maxLines: 2,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              '双方应显示相同的验证码：',
+              style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+            ),
+            const SizedBox(height: 12),
+            _PinDisplay(pairCode: widget.pairCode),
+            const SizedBox(height: 12),
+            _buildStatusLine(),
+          ],
+        ),
       ),
       actions: _buildActions(),
     );
@@ -175,46 +186,50 @@ class _PairingPinDialogState extends State<PairingPinDialog> {
   }
 }
 
-/// 6 位 PIN 数字显示组件
+/// PIN 数字显示组件，自适应宽度避免溢出弹窗
 class _PinDisplay extends StatelessWidget {
   final String pairCode;
   const _PinDisplay({required this.pairCode});
 
   @override
   Widget build(BuildContext context) {
+    final digits = pairCode.split('');
+    // Allow horizontal scrolling if the code is too wide for the dialog
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(12),
       ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: pairCode.split('').map((digit) {
-          return Container(
-            width: 36,
-            height: 48,
-            margin: const EdgeInsets.symmetric(horizontal: 4),
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surface,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                color: Theme.of(context).colorScheme.primary.withAlpha(60),
-              ),
-            ),
-            child: Center(
-              child: Text(
-                digit,
-                style: TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.w700,
-                  color: Theme.of(context).colorScheme.primary,
-                  letterSpacing: 2,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: digits.map((digit) {
+            return Container(
+              width: 36,
+              height: 48,
+              margin: const EdgeInsets.symmetric(horizontal: 3),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surface,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: Theme.of(context).colorScheme.primary.withAlpha(60),
                 ),
               ),
-            ),
-          );
-        }).toList(),
+              child: Center(
+                child: Text(
+                  digit,
+                  style: TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w700,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        ),
       ),
     );
   }
