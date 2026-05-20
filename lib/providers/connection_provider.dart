@@ -289,7 +289,7 @@ class ConnectionNotifier extends Notifier<Map<String, bool>> {
         });
         break;
       case 'transfer_complete':
-        _onReceiveComplete(rtask, true);
+        _onReceiveComplete(rtask, event['success'] as bool? ?? true);
         break;
       case 'error':
         _onReceiveComplete(rtask, false);

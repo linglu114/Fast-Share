@@ -202,6 +202,7 @@ class ReceiveEngine {
         'transferId': _transferId,
         'message': 'Frame parse failed: $e',
       });
+      _sendTransferComplete(false);
       _cancel();
     }
   }
@@ -269,6 +270,7 @@ class ReceiveEngine {
         'transferId': _transferId,
         'message': 'FILE_META failed: $e',
       });
+      _sendTransferComplete(false);
       _cancel();
     }
   }

@@ -884,6 +884,23 @@ class TransferSession {
   void _onTransferCompleteReceived(FlpFrame frame) {
     Logger.log('[ENG] TRANSFER_COMPLETE received: totalAcked=$_totalAckedBytes totalSize=$_totalSize bytesTransferred=$_bytesTransferred');
     Logger.flushSync();
+
+    // Parse receiver's success flag
+    bool success = true;
+    try {
+      final payload = jsonDecode(utf8.decode(frame.payload)) as Map<String, dynamic>;
+      success = payload['success'] as bool? ?? true;
+      Logger.log('[ENG] TRANSFER_COMPLETE success=$success failedFiles=${payload['failedFiles']}');
+    } catch (_) {}
+
+    if (!success) {
+      _sendEvent('error', {
+        'transferId': transferId,
+        'message': 'Transfer failed on receiver side',
+      });
+      return;
+    }
+
     _completed = true;
     if (_allFilesDone != null && !_allFilesDone!.isCompleted) {
       _allFilesDone!.complete();
