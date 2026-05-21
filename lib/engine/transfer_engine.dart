@@ -73,6 +73,7 @@ class TransferEngine {
     final speedLimit = payload['speedLimit'] as int? ?? 0;
     final concurrentCount = payload['concurrentCount'] as int? ?? 0;
     final retryCount = payload['retryCount'] as int? ?? 3;
+    final tempDir = payload['tempDir'] as String?;
 
     final session = TransferSession(
       transferId: transferId,
@@ -86,6 +87,7 @@ class TransferEngine {
       concurrentCount: concurrentCount,
       retryCount: retryCount,
       engine: this,
+      tempDir: tempDir,
     );
 
     _sessions[transferId] = session;
@@ -196,6 +198,7 @@ class TransferSession {
 
   final String senderDeviceId;
   final String senderDeviceName;
+  final String? tempDir;
 
   TransferSession({
     required this.transferId,
@@ -209,6 +212,7 @@ class TransferSession {
     required this.concurrentCount,
     required this.retryCount,
     required this.engine,
+    this.tempDir,
   }) {
     if (speedLimit > 0) {
       _tokenBucket = TokenBucket(speedLimit);
@@ -228,17 +232,7 @@ class TransferSession {
       return;
     }
 
-    // 阶段 2: 收集文件大小 (轻量级 lengthSync, 非 stat)
-    _collectFileSizes();
-    _sendFileListChunk(); // 此时文件大小已收集完毕，重新发送列表
-
-    // 阶段 3: 判定传输模式 + 并发数
-    _strategy = _decideStrategy();
-    if (concurrentCount == 0) {
-      concurrentCount = _files.length < 200 ? _randomInRange(3, 6) : _randomInRange(4, 8);
-    }
-
-    // 阶段 4: 连接目标
+    // 阶段 2: 连接目标 (提前连接，减少用户等待)
     _sendEvent('phase_change', {
       'transferId': transferId,
       'phase': 'connecting',
@@ -260,7 +254,15 @@ class TransferSession {
     _startSocketListener();
     _startHeartbeat();
 
-    // 阶段 5: 发送 TRANSFER_OFFER，等待接收端 TRANSFER_ACCEPT 再发送文件数据
+    // 阶段 3: 收集文件大小 + 判定传输模式
+    _collectFileSizes();
+    _sendFileListChunk();
+    _strategy = _decideStrategy();
+    if (concurrentCount == 0) {
+      concurrentCount = _files.length < 200 ? _randomInRange(3, 6) : _randomInRange(4, 8);
+    }
+
+    // 阶段 4: 发送 TRANSFER_OFFER，等待接收端 TRANSFER_ACCEPT
     _sendTransferOffer();
     _sendEvent('phase_change', {
       'transferId': transferId,
@@ -313,7 +315,7 @@ class TransferSession {
       'totalSize': _totalSize,
     });
 
-    // 阶段 6: 开始传输
+    // 阶段 5: 开始传输
     await _executeTransfer();
   }
 
@@ -358,6 +360,7 @@ class TransferSession {
     try {
       _socket?.close();
     } catch (_) {}
+    _cleanupCacheFiles();
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -380,7 +383,6 @@ class TransferSession {
       }
     }
 
-    // file list sent after _collectFileSizes
   }
 
   Future<void> _scanDirectory(String dirPath, String relativePrefix) async {
@@ -902,6 +904,7 @@ class TransferSession {
     }
 
     _completed = true;
+    _cleanupCacheFiles();
     if (_allFilesDone != null && !_allFilesDone!.isCompleted) {
       _allFilesDone!.complete();
     }
@@ -1057,6 +1060,17 @@ class TransferSession {
       'transferId': transferId,
       'message': message,
     });
+  }
+
+  void _cleanupCacheFiles() {
+    if (tempDir == null) return;
+    for (final entry in _files) {
+      try {
+        if (!entry.absolutePath.startsWith(tempDir!)) continue;
+        final file = File(entry.absolutePath);
+        if (file.existsSync()) file.deleteSync();
+      } catch (_) {}
+    }
   }
 
   int _randomInRange(int min, int max) =>

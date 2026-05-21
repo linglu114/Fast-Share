@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:isolate';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 import '../models/transfer_task.dart';
 import '../models/device.dart';
@@ -371,6 +372,7 @@ class TransferNotifier extends Notifier<void> {
     ref.read(activeTransferProvider.notifier).state = task;
 
     // 发送命令到 Engine
+    final tempDir = (await getTemporaryDirectory()).path;
     _engineSendPort?.send({
       'type': EngineCommandType.startTransfer,
       'payload': {
@@ -385,6 +387,7 @@ class TransferNotifier extends Notifier<void> {
         'speedLimit': ref.read(speedLimitProvider),
         'concurrentCount': ref.read(concurrentCountProvider),
         'retryCount': settings.retryCount,
+        'tempDir': tempDir,
       },
     });
   }
