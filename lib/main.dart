@@ -86,25 +86,25 @@ Future<String?> _getDeviceName() async {
   return null;
 }
 
-/// Android 首次启动时申请存储权限，确保下载目录（/storage/emulated/0/Download）可写
+/// Android 存储权限 — 按 API 级别精确适配，避免过度授权触发系统警告
+///
+/// API < 29 (Android 9-): 仍需 READ/WRITE_EXTERNAL_STORAGE
+/// API 29-32 (Android 10-12): 分区存储已生效，写入 Download 目录无需权限
+/// API 33+ (Android 13+): 使用 READ_MEDIA_* 细粒度权限
 Future<void> _requestStoragePermissions() async {
-  // 从 Platform.operatingSystemVersion 解析 API level
-  // 格式如 "Android 10 (API 29)"
   final sdkInt = _parseAndroidSdkInt();
 
-  if (sdkInt >= 30) {
-    // Android 11+：MANAGE_EXTERNAL_STORAGE 是唯一有效的方式
-    final status = await Permission.manageExternalStorage.status;
-    if (!status.isGranted) {
-      await Permission.manageExternalStorage.request();
-    }
-  } else {
-    // Android 10 及以下：READ/WRITE_EXTERNAL_STORAGE
+  if (sdkInt < 29) {
+    // Android 9 及以下：传统存储权限
     final status = await Permission.storage.status;
     if (!status.isGranted) {
       await Permission.storage.request();
     }
+  } else if (sdkInt >= 33) {
+    // Android 13+：无需在启动时申请存储权限，file_picker 自行处理读权限，
+    // 写入 Download 目录由分区存储机制保证无需额外权限
   }
+  // API 29-32：分区存储下写入 Download 目录已无需权限，无需请求
 }
 
 /// Android 13+ 通知权限（前台服务必需）
