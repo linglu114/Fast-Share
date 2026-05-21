@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -40,13 +41,12 @@ void main() async {
     await settingsRepo.setDeviceId(const Uuid().v4());
   }
 
-  // 读取本机主机名作为默认设备名
+  // 读取设备名：Android 用 Build.MODEL，其他平台用 hostname
   try {
-    final hostname = Platform.localHostname;
-    if (hostname.isNotEmpty && hostname != 'localhost') {
-      // 只在首次启动时设置（deviceName 为默认值 "My Device" 说明未修改过）
+    final deviceName = await _getDeviceName();
+    if (deviceName != null) {
       if (settingsRepo.deviceName == 'My Device') {
-        await settingsRepo.setDeviceName(hostname);
+        await settingsRepo.setDeviceName(deviceName);
       }
     }
   } catch (_) {}
@@ -62,6 +62,27 @@ void main() async {
       child: const FastShareApp(),
     ),
   );
+}
+
+/// 读取设备名：Android 通过 MethodChannel 读取 Build.MODEL，
+/// 其他平台用 Platform.localHostname。
+Future<String?> _getDeviceName() async {
+  if (Platform.isAndroid) {
+    try {
+      const channel = MethodChannel('fastshare/device_info');
+      final model = await channel.invokeMethod<String>('getDeviceModel');
+      if (model != null && model.isNotEmpty) {
+        return model;
+      }
+    } catch (_) {}
+  }
+  try {
+    final hostname = Platform.localHostname;
+    if (hostname.isNotEmpty && hostname != 'localhost') {
+      return hostname;
+    }
+  } catch (_) {}
+  return null;
 }
 
 /// Android 首次启动时申请存储权限，确保下载目录（/storage/emulated/0/Download）可写

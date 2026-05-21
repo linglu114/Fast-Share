@@ -1,6 +1,7 @@
 package com.fastshare.fastshare
 
 import android.net.wifi.WifiManager
+import android.os.Build
 import android.os.PowerManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -23,6 +24,13 @@ class MainActivity : FlutterActivity() {
                     releaseMulticastLock()
                     result.success(true)
                 }
+                else -> result.notImplemented()
+            }
+        }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "fastshare/device_info").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "getDeviceModel" -> result.success(Build.MODEL)
                 else -> result.notImplemented()
             }
         }
