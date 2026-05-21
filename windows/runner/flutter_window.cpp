@@ -4,6 +4,16 @@
 
 #include "flutter/generated_plugin_registrant.h"
 
+namespace {
+
+void LogWinMsg(const wchar_t* msg, int v1, int v2) {
+  wchar_t buf[256];
+  _snwprintf_s(buf, _TRUNCATE, L"[fastshare] %s v1=%d v2=%d\n", msg, v1, v2);
+  OutputDebugStringW(buf);
+}
+
+}  // namespace
+
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
 
@@ -11,6 +21,7 @@ void FlutterWindow::SetFixedSize(int width, int height, double dpiScale) {
   fixed_width_ = width;
   fixed_height_ = height;
   dpi_scale_ = dpiScale;
+  LogWinMsg(L"SetFixedSize", width, height);
 }
 
 FlutterWindow::~FlutterWindow() {}
@@ -67,34 +78,30 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
-  // Block ALL size changes. Any code (Flutter, plugins, Windows itself)
-  // that tries to resize this window will hit this and the size will be
-  // forced back to our fixed dimensions at the current DPI.
-  if (message == WM_WINDOWPOSCHANGING) {
-    auto* wp = reinterpret_cast<WINDOWPOS*>(lparam);
-    wp->cx = static_cast<int>(fixed_width_ * dpi_scale_);
-    wp->cy = static_cast<int>(fixed_height_ * dpi_scale_);
-    wp->flags &= ~SWP_NOSIZE;  // ensure size is applied
-    // Fall through to DefWindowProc (Win32Window::MessageHandler → DefWindowProc)
-  }
-
+  // WM_GETMINMAXINFO is sent during window creation and when the user
+  // interacts with sizing edges.  Values are in physical pixels for
+  // per-monitor DPI-aware windows.
   if (message == WM_GETMINMAXINFO) {
     MINMAXINFO* mmi = reinterpret_cast<MINMAXINFO*>(lparam);
-    mmi->ptMinTrackSize.x = fixed_width_;
-    mmi->ptMinTrackSize.y = fixed_height_;
-    mmi->ptMaxTrackSize.x = fixed_width_;
-    mmi->ptMaxTrackSize.y = fixed_height_;
-    mmi->ptMaxSize.x = fixed_width_;
-    mmi->ptMaxSize.y = fixed_height_;
+    int w = static_cast<int>(fixed_width_ * dpi_scale_);
+    int h = static_cast<int>(fixed_height_ * dpi_scale_);
+    mmi->ptMinTrackSize.x = w;
+    mmi->ptMinTrackSize.y = h;
+    mmi->ptMaxTrackSize.x = w;
+    mmi->ptMaxTrackSize.y = h;
+    mmi->ptMaxSize.x = w;
+    mmi->ptMaxSize.y = h;
+    LogWinMsg(L"WM_GETMINMAXINFO", w, h);
     return 0;
   }
 
   if (message == WM_DPICHANGED) {
     dpi_scale_ = static_cast<double>(LOWORD(wparam)) / 96.0;
+    int w = static_cast<int>(fixed_width_ * dpi_scale_);
+    int h = static_cast<int>(fixed_height_ * dpi_scale_);
+    LogWinMsg(L"WM_DPICHANGED", w, LOWORD(wparam));
     auto* newRect = reinterpret_cast<RECT*>(lparam);
-    SetWindowPos(hwnd, nullptr, newRect->left, newRect->top,
-                 static_cast<int>(fixed_width_ * dpi_scale_),
-                 static_cast<int>(fixed_height_ * dpi_scale_),
+    SetWindowPos(hwnd, nullptr, newRect->left, newRect->top, w, h,
                  SWP_NOZORDER | SWP_NOACTIVATE);
     return 0;
   }
@@ -107,6 +114,18 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     if (result) {
       return *result;
     }
+  }
+
+  // Force fixed size AFTER Flutter has processed the message. If we do this
+  // before Flutter, it can overwrite our values. WM_WINDOWPOSCHANGING fires
+  // on every move/drag/resize — we lock cx/cy and return 0.
+  if (message == WM_WINDOWPOSCHANGING) {
+    auto* wp = reinterpret_cast<WINDOWPOS*>(lparam);
+    wp->cx = static_cast<int>(fixed_width_ * dpi_scale_);
+    wp->cy = static_cast<int>(fixed_height_ * dpi_scale_);
+    wp->flags &= ~SWP_NOSIZE;
+    LogWinMsg(L"WM_WINDOWPOSCHANGING force", wp->cx, wp->cy);
+    return 0;
   }
 
   switch (message) {
