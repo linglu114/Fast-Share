@@ -175,53 +175,75 @@ class _DevicesPageState extends ConsumerState<DevicesPage>
   }) {
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 4),
-      child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor: device.platform == 'android'
-              ? Colors.green.shade100
-              : Colors.blue.shade100,
-          child: Icon(
-            device.platform == 'android' ? Icons.android : Icons.laptop,
-            size: 22,
-            color: device.platform == 'android' ? Colors.green : Colors.blue,
-          ),
-        ),
-        title: Text(device.name, style: const TextStyle(fontSize: 14)),
-        subtitle: Text(
-          '${device.ip} · ${isConnected ? "已连接" : "未连接"}',
-          style: const TextStyle(fontSize: 12),
-        ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (isConnected) ...[
-              IconButton(
-                icon: const Icon(Icons.link_off, size: 18),
-                tooltip: '断开连接',
-                color: Colors.red.shade400,
-                onPressed: () {
-                  ref.read(connectionStateProvider.notifier).disconnect(device.deviceId);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('已断开与 ${device.name} 的连接')),
-                  );
-                },
-              ),
-              IconButton(
-                icon: const Icon(Icons.send, size: 18),
-                tooltip: '发送文件',
-                onPressed: () => _sendFilesToDevice(context, ref, device),
-              ),
-              IconButton(
-                icon: const Icon(Icons.content_paste, size: 18),
-                tooltip: '发送剪贴板',
-                onPressed: () => _showClipboardSendDialog(context, ref, device),
-              ),
-            ] else ...[
-              TextButton(
-                onPressed: () => _connectToDevice(context, ref, device),
-                child: const Text('连接'),
-              ),
-            ],
+            Row(
+              children: [
+                CircleAvatar(
+                  radius: 18,
+                  backgroundColor: device.platform == 'android'
+                      ? Colors.green.shade100
+                      : Colors.blue.shade100,
+                  child: Icon(
+                    device.platform == 'android' ? Icons.android : Icons.laptop,
+                    size: 20,
+                    color: device.platform == 'android' ? Colors.green : Colors.blue,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(device.name,
+                          style: const TextStyle(fontSize: 14),
+                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                      Text(
+                        '${device.ip} · ${isConnected ? "已连接" : "未连接"}',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                if (isConnected) ...[
+                  IconButton(
+                    icon: const Icon(Icons.link_off, size: 18),
+                    tooltip: '断开连接',
+                    color: Colors.red.shade400,
+                    onPressed: () {
+                      ref.read(connectionStateProvider.notifier).disconnect(device.deviceId);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('已断开与 ${device.name} 的连接')),
+                      );
+                    },
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.send, size: 18),
+                    tooltip: '发送文件',
+                    onPressed: () => _sendFilesToDevice(context, ref, device),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.content_paste, size: 18),
+                    tooltip: '发送剪贴板',
+                    onPressed: () => _showClipboardSendDialog(context, ref, device),
+                  ),
+                ] else ...[
+                  TextButton(
+                    onPressed: () => _connectToDevice(context, ref, device),
+                    child: const Text('连接'),
+                  ),
+                ],
+              ],
+            ),
           ],
         ),
       ),
@@ -541,11 +563,27 @@ class _UnifiedQrSheet extends StatefulWidget {
 
 class _UnifiedQrSheetState extends State<_UnifiedQrSheet> {
   late String _currentIp;
+  StreamSubscription<PairRequest>? _pairReqSub;
 
   @override
   void initState() {
     super.initState();
     _currentIp = widget.notifier.localIp ?? '未知';
+    // Auto-close when someone scans our QR and connects
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _pairReqSub = widget.ref
+          .read(connectionStateProvider.notifier)
+          .pairRequestStream
+          .listen((_) {
+        if (mounted) Navigator.of(context).pop();
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _pairReqSub?.cancel();
+    super.dispose();
   }
 
   QrCode _buildQr(String ip) {
@@ -720,7 +758,9 @@ class _UnifiedQrSheetState extends State<_UnifiedQrSheet> {
       MaterialPageRoute(builder: (_) => const _QrScannerPage()),
     );
 
-    if (device != null && context.mounted) {
+    if (device != null) {
+      // Close the QR sheet before triggering connection, matching shortcode behavior
+      Navigator.of(context).pop();
       widget.onDeviceFound(device);
     }
   }
@@ -806,24 +846,16 @@ class _UnifiedQrSheetState extends State<_UnifiedQrSheet> {
                 style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
             const SizedBox(height: 16),
             // ── 整合功能按钮（短码输入 + 扫码连接）──
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: _onInputShortCode,
-                    icon: const Icon(Icons.dialpad, size: 18),
-                    label: const Text('输入短码'),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: _onScanQrCode,
-                    icon: const Icon(Icons.qr_code_scanner, size: 18),
-                    label: const Text('扫描二维码'),
-                  ),
-                ),
-              ],
+            OutlinedButton.icon(
+              onPressed: _onInputShortCode,
+              icon: const Icon(Icons.dialpad, size: 18),
+              label: const Text('输入短码'),
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: _onScanQrCode,
+              icon: const Icon(Icons.qr_code_scanner, size: 18),
+              label: const Text('扫描二维码'),
             ),
             const SizedBox(height: 12),
             SizedBox(

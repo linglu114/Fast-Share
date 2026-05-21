@@ -362,7 +362,8 @@ class SettingsPage extends ConsumerWidget {
                     final d = devices[i];
                     return ListTile(
                       leading: const Icon(Icons.devices),
-                      title: Text(d.deviceName),
+                      title: Text(d.deviceName,
+                          maxLines: 1, overflow: TextOverflow.ellipsis),
                       subtitle: const Text('已配对'),
                       trailing: IconButton(
                         icon: const Icon(Icons.delete_outline),
@@ -461,23 +462,19 @@ class _DownloadPathDialogState extends State<_DownloadPathDialog> {
               ),
             ),
             const SizedBox(height: 16),
-            Row(
-              children: [
-                OutlinedButton.icon(
-                  icon: const Icon(Icons.folder_open, size: 18),
-                  label: const Text('浏览...'),
-                  onPressed: _pickFolder,
-                ),
-                const SizedBox(width: 12),
-                OutlinedButton.icon(
-                  icon: Icon(
-                    isDefault ? Icons.check_circle : Icons.restore,
-                    size: 18,
-                  ),
-                  label: const Text('恢复默认'),
-                  onPressed: isDefault ? null : _restoreDefault,
-                ),
-              ],
+            OutlinedButton.icon(
+              icon: const Icon(Icons.folder_open, size: 18),
+              label: const Text('浏览...'),
+              onPressed: _pickFolder,
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              icon: Icon(
+                isDefault ? Icons.check_circle : Icons.restore,
+                size: 18,
+              ),
+              label: const Text('恢复默认'),
+              onPressed: isDefault ? null : _restoreDefault,
             ),
           ],
         ),
