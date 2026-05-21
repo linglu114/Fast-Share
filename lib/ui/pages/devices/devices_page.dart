@@ -486,7 +486,10 @@ class _DevicesPageState extends ConsumerState<DevicesPage>
           children: [
             const Icon(Icons.content_paste, size: 20),
             const SizedBox(width: 8),
-            Text('发送剪贴板内容到 ${device.name}'),
+            Expanded(
+              child: Text('发送文本到${device.name}的剪贴板',
+                  maxLines: 2, overflow: TextOverflow.ellipsis),
+            ),
           ],
         ),
         content: TextField(
@@ -517,7 +520,7 @@ class _DevicesPageState extends ConsumerState<DevicesPage>
                   .pushText(device.deviceId, text);
               Navigator.pop(ctx);
               ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('已发送剪贴板内容到 ${device.name}')),
+                SnackBar(content: Text('已发送文本到${device.name}的剪贴板')),
               );
             },
             child: const Text('发送'),
