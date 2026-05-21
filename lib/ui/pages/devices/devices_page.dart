@@ -5,6 +5,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import '../../../engine/pairing.dart';
 import '../../../models/device.dart';
@@ -555,6 +557,7 @@ class _UnifiedQrSheetState extends State<_UnifiedQrSheet> {
       'deviceId': localDevice.deviceId,
       'name': localDevice.name,
       'ver': 1,
+      'platform': Platform.operatingSystem,
     });
     return QrCode.fromData(data: qrData, errorCorrectLevel: QrErrorCorrectLevel.L);
   }
@@ -677,7 +680,7 @@ class _UnifiedQrSheetState extends State<_UnifiedQrSheet> {
     );
   }
 
-  void _onScanQrCode() {
+  Future<void> _onScanQrCode() async {
     final isMobile = Platform.isAndroid || Platform.isIOS;
     if (!isMobile) {
       showDialog(
@@ -695,10 +698,31 @@ class _UnifiedQrSheetState extends State<_UnifiedQrSheet> {
       );
       return;
     }
-    // TODO: 移动端扫码流程 — 集成 mobile_scanner 打开摄像头扫描对方二维码
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('扫码功能开发中...')),
+
+    // 检查并请求摄像头权限
+    var status = await Permission.camera.status;
+    if (!status.isGranted) {
+      status = await Permission.camera.request();
+      if (!status.isGranted) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('需要摄像头权限才能扫描二维码')),
+          );
+        }
+        return;
+      }
+    }
+
+    if (!context.mounted) return;
+
+    // 打开扫码页面，返回扫描到的 Device
+    final device = await Navigator.of(context).push<Device>(
+      MaterialPageRoute(builder: (_) => const _QrScannerPage()),
     );
+
+    if (device != null && context.mounted) {
+      widget.onDeviceFound(device);
+    }
   }
 
   @override
@@ -836,4 +860,155 @@ class _SectionHeader extends StatelessWidget {
       ),
     );
   }
+}
+
+// ────────────────────────────────────────────────────────────
+// QR Scanner page — full-screen camera with scan overlay
+// ────────────────────────────────────────────────────────────
+
+class _QrScannerPage extends StatefulWidget {
+  const _QrScannerPage();
+
+  @override
+  State<_QrScannerPage> createState() => _QrScannerPageState();
+}
+
+class _QrScannerPageState extends State<_QrScannerPage> {
+  final MobileScannerController _controller = MobileScannerController();
+  bool _handled = false;
+
+  Device? _tryParse(String? raw) {
+    if (raw == null) return null;
+    try {
+      final data = jsonDecode(raw) as Map<String, dynamic>;
+      // Validate required fields
+      if (data['deviceId'] is! String ||
+          data['ip'] is! String ||
+          data['port'] is! int) {
+        return null;
+      }
+      return Device(
+        deviceId: data['deviceId'] as String,
+        name: (data['name'] as String?) ?? 'Unknown',
+        platform: (data['platform'] as String?) ?? 'unknown',
+        ip: data['ip'] as String,
+        port: data['port'] as int,
+        protocolVersion: (data['ver'] as int?) ?? 1,
+        lastSeen: DateTime.now(),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _onDetect(BarcodeCapture capture) {
+    if (_handled) return;
+    for (final barcode in capture.barcodes) {
+      final device = _tryParse(barcode.rawValue);
+      if (device != null) {
+        _handled = true;
+        HapticFeedback.mediumImpact();
+        _controller.stop();
+        Navigator.of(context).pop(device);
+        return;
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scanAreaSize = MediaQuery.of(context).size.width * 0.65;
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        title: const Text('扫描二维码'),
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        elevation: 0,
+      ),
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          MobileScanner(
+            controller: _controller,
+            onDetect: _onDetect,
+            errorBuilder: (context, error) {
+              return Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.error_outline, color: Colors.white70, size: 48),
+                    const SizedBox(height: 16),
+                    Text(
+                      '摄像头不可用',
+                      style: TextStyle(color: Colors.white70, fontSize: 16),
+                    ),
+                    const SizedBox(height: 8),
+                    FilledButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('返回'),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+          // Semi-transparent overlay with scan area cutout
+          _ScannerOverlay(scanAreaSize: scanAreaSize),
+        ],
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+}
+
+class _ScannerOverlay extends StatelessWidget {
+  final double scanAreaSize;
+  const _ScannerOverlay({required this.scanAreaSize});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: SizedBox(
+        width: scanAreaSize,
+        height: scanAreaSize,
+        child: CustomPaint(
+          painter: _ScannerFramePainter(),
+        ),
+      ),
+    );
+  }
+}
+
+class _ScannerFramePainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3;
+
+    const cornerLen = 32.0;
+
+    // Top-left
+    canvas.drawLine(Offset.zero, Offset(0, cornerLen), paint);
+    canvas.drawLine(Offset.zero, Offset(cornerLen, 0), paint);
+    // Top-right
+    canvas.drawLine(Offset(size.width, 0), Offset(size.width, cornerLen), paint);
+    canvas.drawLine(Offset(size.width, 0), Offset(size.width - cornerLen, 0), paint);
+    // Bottom-left
+    canvas.drawLine(Offset(0, size.height), Offset(0, size.height - cornerLen), paint);
+    canvas.drawLine(Offset(0, size.height), Offset(cornerLen, size.height), paint);
+    // Bottom-right
+    canvas.drawLine(Offset(size.width, size.height), Offset(size.width, size.height - cornerLen), paint);
+    canvas.drawLine(Offset(size.width, size.height), Offset(size.width - cornerLen, size.height), paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
