@@ -52,6 +52,12 @@ class TransferEngine {
       case 'cancel':
         _cancelTransfer(payload['transferId'] as String);
         break;
+      case 'chunk_data':
+        final tid = payload['transferId'] as String?;
+        if (tid != null) {
+          _sessions[tid]?.onChunkData(payload);
+        }
+        break;
       case 'shutdown':
         _commandPort.close();
         break;
@@ -64,7 +70,9 @@ class TransferEngine {
 
   void _startTransfer(Map<String, dynamic> payload) {
     final transferId = payload['transferId'] as String;
-    final paths = (payload['paths'] as List).cast<String>();
+    final paths = (payload['paths'] as List?)?.cast<String>() ?? [];
+    final contentFiles =
+        (payload['contentFiles'] as List?)?.cast<Map<String, dynamic>>() ?? [];
     final targetIp = payload['targetIp'] as String;
     final targetPort = payload['targetPort'] as int;
     final folderMode = payload['folderMode'] as bool? ?? false;
@@ -78,6 +86,7 @@ class TransferEngine {
     final session = TransferSession(
       transferId: transferId,
       paths: paths,
+      contentFiles: contentFiles,
       targetIp: targetIp,
       targetPort: targetPort,
       folderMode: folderMode,
@@ -146,6 +155,7 @@ class TransferEngine {
 class TransferSession {
   final String transferId;
   final List<String> paths;
+  final List<Map<String, dynamic>> contentFiles;
   final String targetIp;
   final int targetPort;
   final bool folderMode;
@@ -163,6 +173,7 @@ class TransferSession {
   // Socket 监听（接收 ACK）
   Uint8List _frameBuffer = Uint8List(0);
   final Map<String, Completer<void>> _ackWaiters = {};
+  final Map<String, Completer<Uint8List>> _chunkWaiters = {};
   final Map<String, bool> _fileCompleted = {};
   Completer<void>? _allFilesDone;
   Completer<void>? _acceptReceived;
@@ -203,6 +214,7 @@ class TransferSession {
   TransferSession({
     required this.transferId,
     required this.paths,
+    this.contentFiles = const [],
     required this.targetIp,
     required this.targetPort,
     required this.folderMode,
@@ -344,6 +356,10 @@ class TransferSession {
       if (!c.isCompleted) c.complete();
     }
     _ackWaiters.clear();
+    for (final c in _chunkWaiters.values) {
+      if (!c.isCompleted) c.completeError(Exception('Transfer cancelled'));
+    }
+    _chunkWaiters.clear();
     if (_allFilesDone != null && !_allFilesDone!.isCompleted) {
       _allFilesDone!.complete();
     }
@@ -368,6 +384,26 @@ class TransferSession {
   // ═══════════════════════════════════════════════════════════
 
   Future<void> _scanFiles() async {
+    // Content URI files: no scanning needed, name and size already known
+    for (final f in contentFiles) {
+      if (_cancelled) break;
+      final uri = f['uri'] as String? ?? '';
+      final name = f['name'] as String? ?? 'unknown';
+      final size = f['size'] as int? ?? 0;
+      if (uri.isNotEmpty) {
+        final id = _makeFileId(_files.length);
+        _files.add(FileEntry(
+          fileId: id,
+          absolutePath: uri,
+          relativePath: name,
+          size: size,
+          mtime: 0,
+          contentUri: uri,
+        ));
+        _totalSize += size;
+      }
+    }
+
     for (final path in paths) {
       if (_cancelled) break;
 
@@ -447,6 +483,10 @@ class TransferSession {
   void _collectFileSizes() {
     int total = 0;
     for (final entry in _files) {
+      if (entry.contentUri != null) {
+        total += entry.size;
+        continue;
+      }
       try {
         entry.size = File(entry.absolutePath).lengthSync();
       } catch (_) {
@@ -518,12 +558,16 @@ class TransferSession {
   /// 单文件顺序传输
   Future<void> _transferSingleFile(FileEntry file) async {
     final totalChunks = (file.size / chunkSize).ceil();
-    Logger.log('[ENG] _transferSingleFile: fileId=${file.fileId} size=${file.size} chunks=$totalChunks');
+    final useContentUri = file.contentUri != null;
+    Logger.log('[ENG] _transferSingleFile: fileId=${file.fileId} size=${file.size} chunks=$totalChunks contentUri=$useContentUri');
 
     // 发送 FILE_META
     _sendFrame(_buildFileMeta(file, chunkSize));
 
-    final raf = await File(file.absolutePath).open(mode: FileMode.read);
+    RandomAccessFile? raf;
+    if (!useContentUri) {
+      raf = await File(file.absolutePath).open(mode: FileMode.read);
+    }
     int offset = 0;
 
     try {
@@ -544,7 +588,9 @@ class TransferSession {
           await _tokenBucket!.consume(currentChunkSize);
         }
 
-        final data = await raf.read(currentChunkSize);
+        final data = useContentUri
+            ? await _requestChunk(file.fileId, file.contentUri!, i, offset, currentChunkSize)
+            : await raf!.read(currentChunkSize);
         _sendFrame(_buildFileData(file.fileId, i, offset, data));
 
         _bytesTransferred += currentChunkSize;
@@ -614,7 +660,9 @@ class TransferSession {
       // 重试逻辑
       if (file.retries < retryCount) {
         file.retries++;
-        raf.setPositionSync(0);
+        if (!useContentUri) {
+          raf?.setPositionSync(0);
+        }
         offset = 0;
         _bytesTransferred -= file.bytesTransferred;
         file.bytesTransferred = 0;
@@ -630,7 +678,7 @@ class TransferSession {
         });
       }
     } finally {
-      await raf.close();
+      await raf?.close();
     }
   }
 
@@ -1065,11 +1113,53 @@ class TransferSession {
   void _cleanupCacheFiles() {
     if (tempDir == null) return;
     for (final entry in _files) {
+      if (entry.contentUri != null) continue;
       try {
         if (!entry.absolutePath.startsWith(tempDir!)) continue;
         final file = File(entry.absolutePath);
         if (file.existsSync()) file.deleteSync();
       } catch (_) {}
+    }
+  }
+
+  Future<Uint8List> _requestChunk(
+      String fileId, String uri, int chunkIndex, int offset, int length) async {
+    final key = '$transferId:$fileId:$chunkIndex';
+    final completer = Completer<Uint8List>();
+    _chunkWaiters[key] = completer;
+
+    _sendEvent('request_chunk', {
+      'transferId': transferId,
+      'fileId': fileId,
+      'uri': uri,
+      'chunkIndex': chunkIndex,
+      'offset': offset,
+      'length': length,
+    });
+
+    return completer.future.timeout(
+      const Duration(seconds: 30),
+      onTimeout: () {
+        _chunkWaiters.remove(key);
+        throw Exception('Chunk read timeout: $key');
+      },
+    );
+  }
+
+  void onChunkData(Map<String, dynamic> payload) {
+    final fileId = payload['fileId'] as String? ?? '';
+    final chunkIndex = payload['chunkIndex'] as int? ?? 0;
+    final data = payload['data'] as Uint8List?;
+    final error = payload['error'] as String?;
+
+    final key = '$transferId:$fileId:$chunkIndex';
+    final waiter = _chunkWaiters.remove(key);
+    if (waiter == null || waiter.isCompleted) return;
+
+    if (error != null) {
+      waiter.completeError(Exception(error));
+    } else {
+      waiter.complete(data ?? Uint8List(0));
     }
   }
 
@@ -1085,6 +1175,7 @@ class FileEntry {
   final String fileId;
   final String absolutePath;
   final String relativePath;
+  final String? contentUri;
   int size;
   int mtime;
   int bytesTransferred;
@@ -1098,6 +1189,7 @@ class FileEntry {
     required this.relativePath,
     required this.size,
     required this.mtime,
+    this.contentUri,
     this.bytesTransferred = 0,
     this.lastAckedOffset = 0,
     this.status = FileStatus.pending,

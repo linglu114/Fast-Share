@@ -14,6 +14,7 @@ import '../../../business/connection/connection_manager.dart';
 import '../../../providers/discovery_provider.dart';
 import '../../../providers/connection_provider.dart';
 import '../../../providers/settings_provider.dart';
+import '../../../platform/content_uri_reader.dart';
 import '../../../providers/transfer_provider.dart';
 import '../../../providers/clipboard_provider.dart';
 import '../../../storage/trusted_device_repository.dart';
@@ -448,6 +449,13 @@ class _DevicesPageState extends ConsumerState<DevicesPage>
     if (choice == null || !context.mounted) return;
 
     if (choice == 'files') {
+      if (ContentUriReader.isSupported) {
+        final files = await ContentUriReader.pickFiles();
+        if (files.isEmpty) return;
+        await _startTransferToDevice(ref, device, [], false,
+            contentFiles: files);
+        return;
+      }
       final result = await FilePicker.pickFiles(
         allowMultiple: true,
         type: FileType.any,
@@ -467,9 +475,11 @@ class _DevicesPageState extends ConsumerState<DevicesPage>
   }
 
   Future<void> _startTransferToDevice(
-      WidgetRef ref, Device device, List<String> paths, bool folderMode) async {
+      WidgetRef ref, Device device, List<String> paths, bool folderMode,
+      {List<Map<String, dynamic>>? contentFiles}) async {
     await ref.read(transferNotifierProvider.notifier).startTransfer(
           paths: paths,
+          contentFiles: contentFiles,
           targetDevice: device,
           folderMode: folderMode,
           ref: ref,

@@ -1,5 +1,6 @@
 package com.fastshare.fastshare
 
+import android.app.Activity
 import android.content.Intent
 import android.net.wifi.WifiManager
 import android.os.Build
@@ -11,6 +12,7 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     private var multicastLock: WifiManager.MulticastLock? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    private var pickFilesResult: MethodChannel.Result? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -68,6 +70,45 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "fastshare/content_uri").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "pickFiles" -> {
+                    pickFilesResult = result
+                    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = "*/*"
+                        putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                    }
+                    startActivityForResult(intent, PICK_FILES_REQUEST)
+                }
+                "readChunk" -> {
+                    val uri = call.argument<String>("uri") ?: ""
+                    val offset = call.argument<Int>("offset") ?: 0
+                    val length = call.argument<Int>("length") ?: 0
+                    val data = ContentUriHelper.readChunk(applicationContext, uri, offset, length)
+                    result.success(data)
+                }
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == PICK_FILES_REQUEST) {
+            val result = pickFilesResult ?: return
+            pickFilesResult = null
+            if (resultCode == Activity.RESULT_OK && data != null) {
+                result.success(ContentUriHelper.parsePickResult(applicationContext, data))
+            } else {
+                result.success(emptyList<Map<String, Any?>>())
+            }
+        }
+    }
+
+    companion object {
+        private const val PICK_FILES_REQUEST = 1001
     }
 
     private fun acquireMulticastLock() {

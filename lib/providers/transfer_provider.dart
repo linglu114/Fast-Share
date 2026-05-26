@@ -9,6 +9,7 @@ import '../engine/commands.dart';
 import '../engine/transfer_engine.dart';
 import '../util/logger.dart';
 import '../platform/foreground_service_manager.dart';
+import '../platform/content_uri_reader.dart';
 import 'settings_provider.dart';
 import '../models/history_record.dart';
 import '../storage/history_repository.dart';
@@ -133,6 +134,9 @@ class TransferNotifier extends Notifier<void> {
         break;
       case 'transfer_complete':
         _onTransferComplete(data);
+        break;
+      case 'request_chunk':
+        _onRequestChunk(data);
         break;
       case 'error':
         _onError(data);
@@ -331,12 +335,48 @@ class TransferNotifier extends Notifier<void> {
     }
   }
 
+  void _onRequestChunk(Map<String, dynamic> data) async {
+    final transferId = data['transferId'] as String? ?? '';
+    final fileId = data['fileId'] as String? ?? '';
+    final uri = data['uri'] as String? ?? '';
+    final chunkIndex = data['chunkIndex'] as int? ?? 0;
+    final offset = data['offset'] as int? ?? 0;
+    final length = data['length'] as int? ?? 0;
+
+    try {
+      final chunk = await ContentUriReader.readChunk(uri, offset, length);
+      _engineSendPort?.send({
+        'type': 'chunk_data',
+        'payload': {
+          'transferId': transferId,
+          'fileId': fileId,
+          'chunkIndex': chunkIndex,
+          'offset': offset,
+          'data': chunk,
+          'error': chunk == null ? 'Read failed' : null,
+        },
+      });
+    } catch (e) {
+      _engineSendPort?.send({
+        'type': 'chunk_data',
+        'payload': {
+          'transferId': transferId,
+          'fileId': fileId,
+          'chunkIndex': chunkIndex,
+          'offset': offset,
+          'error': '$e',
+        },
+      });
+    }
+  }
+
   // ═══════════════════════════════════════════════════════════
   // 公共操作
   // ═══════════════════════════════════════════════════════════
 
   Future<void> startTransfer({
     required List<String> paths,
+    List<Map<String, dynamic>>? contentFiles,
     required Device targetDevice,
     bool folderMode = false,
     required WidgetRef ref,
@@ -378,6 +418,7 @@ class TransferNotifier extends Notifier<void> {
       'payload': {
         'transferId': transferId,
         'paths': paths,
+        'contentFiles': contentFiles ?? [],
         'targetIp': targetDevice.ip,
         'targetPort': targetDevice.port,
         'folderMode': folderMode,

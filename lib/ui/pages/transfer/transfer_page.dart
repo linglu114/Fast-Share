@@ -4,6 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import '../../../models/transfer_task.dart';
 import '../../../models/device.dart';
+import '../../../platform/content_uri_reader.dart';
 import '../../../providers/transfer_provider.dart';
 import '../../../providers/connection_provider.dart';
 import '../../../providers/discovery_provider.dart';
@@ -106,6 +107,14 @@ class TransferPage extends ConsumerWidget {
   }
 
   Future<void> _pickFilesAndSend(BuildContext context, WidgetRef ref) async {
+    if (ContentUriReader.isSupported) {
+      final files = await ContentUriReader.pickFiles();
+      if (files.isEmpty) return;
+      await _selectDeviceAndSend(context, ref, [], false,
+          contentFiles: files);
+      return;
+    }
+    // Fallback for non-Android platforms
     final result = await FilePicker.pickFiles(
       allowMultiple: true,
       type: FileType.any,
@@ -139,7 +148,8 @@ class TransferPage extends ConsumerWidget {
   }
 
   Future<void> _selectDeviceAndSend(BuildContext context, WidgetRef ref,
-      List<String> paths, bool folderMode) async {
+      List<String> paths, bool folderMode,
+      {List<Map<String, dynamic>>? contentFiles}) async {
     final device = await _showDevicePicker(context, ref);
     if (device == null) return;
 
@@ -167,6 +177,7 @@ class TransferPage extends ConsumerWidget {
       final notifier = ref.read(transferNotifierProvider.notifier);
       await notifier.startTransfer(
         paths: paths,
+        contentFiles: contentFiles,
         targetDevice: device,
         folderMode: folderMode,
         ref: ref,
