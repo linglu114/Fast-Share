@@ -82,12 +82,26 @@ class MainActivity : FlutterActivity() {
                     }
                     startActivityForResult(intent, PICK_FILES_REQUEST)
                 }
+                "openContentFd" -> {
+                    val uri = call.argument<String>("uri") ?: ""
+                    val fd = ContentUriHelper.openContentFd(applicationContext, uri)
+                    result.success(fd)
+                }
                 "readChunk" -> {
                     val uri = call.argument<String>("uri") ?: ""
                     val offset = call.argument<Int>("offset") ?: 0
                     val length = call.argument<Int>("length") ?: 0
                     val data = ContentUriHelper.readChunk(applicationContext, uri, offset, length)
                     result.success(data)
+                }
+                "closeContentStream" -> {
+                    val uri = call.argument<String>("uri") ?: ""
+                    ContentUriHelper.closeContentStream(uri)
+                    result.success(true)
+                }
+                "closeAllContentStreams" -> {
+                    ContentUriHelper.closeAllContentStreams()
+                    result.success(true)
                 }
                 else -> result.notImplemented()
             }

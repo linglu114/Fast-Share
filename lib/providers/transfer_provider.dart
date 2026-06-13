@@ -309,7 +309,8 @@ class TransferNotifier extends Notifier<void> {
       ForegroundServiceManager().stop();
     }
 
-    // 销毁 Engine Isolate
+    // 关闭 content URI 通道，销毁 Engine Isolate
+    ContentUriReader.closeAllContentStreams();
     _engineIsolate?.then((i) => i.kill());
     _engineIsolate = null;
     _engineSendPort = null;
@@ -341,6 +342,7 @@ class TransferNotifier extends Notifier<void> {
 
     // Clean up if no more transfers in queue
     if (ref.read(transferQueueProvider).isEmpty) {
+      ContentUriReader.closeAllContentStreams();
       ForegroundServiceManager().stop();
       _engineIsolate?.then((i) => i.kill());
       _engineIsolate = null;
@@ -395,7 +397,28 @@ class TransferNotifier extends Notifier<void> {
     bool folderMode = false,
     required WidgetRef ref,
   }) async {
-    await _ensureEngine();
+    // 并行：启动引擎 + 为 content URI 解析 fd 直读路径
+    final engineReady = _ensureEngine();
+
+    // 为无 realPath 的 content URI 打开文件描述符，
+    // 让 Engine Isolate 通过 /proc/self/fd/$fd 直读，消除 Isolate 往返开销
+    final resolvedContentFiles = <Map<String, dynamic>>[];
+    if (contentFiles != null) {
+      for (final f in contentFiles) {
+        final uri = f['uri'] as String? ?? '';
+        final realPath = f['realPath'] as String?;
+        if (realPath == null && uri.isNotEmpty && ContentUriReader.isSupported) {
+          final fd = await ContentUriReader.openContentFd(uri);
+          if (fd >= 0) {
+            resolvedContentFiles.add({...f, 'fd': fd});
+            continue;
+          }
+        }
+        resolvedContentFiles.add(f);
+      }
+    }
+
+    await engineReady;
 
     final transferId = _uuid.v4();
     final settings = ref.read(settingsRepositoryProvider);
@@ -403,10 +426,10 @@ class TransferNotifier extends Notifier<void> {
     // 创建任务
     final batchName = folderMode
         ? '文件夹: ${paths.first.split('/').last.split('\\').last}'
-        : (contentFiles != null && contentFiles.isNotEmpty)
-            ? contentFiles.length == 1
-                ? contentFiles.first['name'] ?? 'unknown'
-                : '${contentFiles.length} 个文件'
+        : (resolvedContentFiles.isNotEmpty)
+            ? resolvedContentFiles.length == 1
+                ? resolvedContentFiles.first['name'] ?? 'unknown'
+                : '${resolvedContentFiles.length} 个文件'
             : paths.length == 1
                 ? paths.first.split('/').last.split('\\').last
                 : '${paths.length} 个文件';
@@ -436,7 +459,7 @@ class TransferNotifier extends Notifier<void> {
       'payload': {
         'transferId': transferId,
         'paths': paths,
-        'contentFiles': contentFiles,
+        'contentFiles': resolvedContentFiles,
         'targetIp': targetDevice.ip,
         'targetPort': targetDevice.port,
         'folderMode': folderMode,
@@ -480,6 +503,8 @@ class TransferNotifier extends Notifier<void> {
   }
 
   void cancelTransfer(String transferId) {
+    ContentUriReader.closeAllContentStreams();
+
     _engineSendPort?.send({
       'type': EngineCommandType.cancel,
       'payload': {'transferId': transferId},

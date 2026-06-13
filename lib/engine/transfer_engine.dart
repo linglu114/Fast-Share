@@ -384,16 +384,25 @@ class TransferSession {
   // ═══════════════════════════════════════════════════════════
 
   Future<void> _scanFiles() async {
-    // Content URI / file picker files: prefer real filesystem path when available
+    // Content URI / file picker files: prefer real filesystem path when available.
+    // On Android, if realPath is unavailable, try fd-based direct read via /proc/self/fd/$fd
+    // to eliminate Isolate round-trips.
     for (final f in contentFiles) {
       if (_cancelled) break;
       final uri = f['uri'] as String? ?? '';
       final name = f['name'] as String? ?? 'unknown';
       final size = f['size'] as int? ?? 0;
       final realPath = f['realPath'] as String?;
+      final fd = f['fd'] as int?;
       if (uri.isNotEmpty) {
         final id = _makeFileId(_files.length);
-        if (realPath != null) {
+        if (fd != null && fd >= 0) {
+          // 直接通过 fd 读取，无需 Isolate 往返
+          _files.add(FileEntry(
+            fileId: id, absolutePath: '/proc/self/fd/$fd', relativePath: name,
+            size: size, mtime: 0, contentUri: null,
+          ));
+        } else if (realPath != null) {
           _files.add(FileEntry(
             fileId: id, absolutePath: realPath, relativePath: name,
             size: size, mtime: 0, contentUri: null,

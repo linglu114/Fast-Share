@@ -22,7 +22,19 @@ class ContentUriReader {
     return [];
   }
 
-  /// 从 content:// URI 读取指定偏移和长度的数据
+  /// 打开 content URI 获取文件描述符编号，用于 Engine Isolate 直读。
+  /// 返回 -1 表示失败（此时回退到 readChunk 路径）。
+  static Future<int> openContentFd(String uri) async {
+    if (!isSupported) return -1;
+    try {
+      final fd = await _channel.invokeMethod('openContentFd', {'uri': uri});
+      if (fd is int) return fd;
+    } catch (_) {}
+    return -1;
+  }
+
+  /// 从 content:// URI 读取指定偏移和长度的数据。
+  /// 原生端使用持久 FileChannel + O(1) lseek，无 O(n²) skip 开销。
   static Future<Uint8List?> readChunk(
       String uri, int offset, int length) async {
     if (!isSupported) return null;
@@ -35,5 +47,21 @@ class ContentUriReader {
       if (data is Uint8List) return data;
     } catch (_) {}
     return null;
+  }
+
+  /// 关闭指定 content URI 的持久读取通道
+  static Future<void> closeContentStream(String uri) async {
+    if (!isSupported) return;
+    try {
+      await _channel.invokeMethod('closeContentStream', {'uri': uri});
+    } catch (_) {}
+  }
+
+  /// 关闭所有持久读取通道
+  static Future<void> closeAllContentStreams() async {
+    if (!isSupported) return;
+    try {
+      await _channel.invokeMethod('closeAllContentStreams');
+    } catch (_) {}
   }
 }
