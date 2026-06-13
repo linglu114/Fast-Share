@@ -3,6 +3,7 @@ package com.fastshare.fastshare
 import android.app.Activity
 import android.content.Intent
 import android.net.wifi.WifiManager
+import android.os.BatteryManager
 import android.os.Build
 import android.os.PowerManager
 import io.flutter.embedding.android.FlutterActivity
