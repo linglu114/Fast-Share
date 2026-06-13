@@ -2,6 +2,7 @@ package com.fastshare.fastshare
 
 import android.app.Activity
 import android.content.Intent
+import android.content.IntentFilter
 import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import android.os.Build
@@ -69,13 +70,11 @@ class MainActivity : FlutterActivity() {
                     result.success(true)
                 }
                 "getBatteryLevel" -> {
-                    val batteryManager = getSystemService(BATTERY_SERVICE) as? BatteryManager
-                    if (batteryManager != null) {
-                        val level = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
-                        result.success(if (level >= 0) level else null)
-                    } else {
-                        result.success(null)
-                    }
+                    // 使用 ACTION_BATTERY_CHANGED 读取框架层电量（可被 dumpsys battery set 覆盖）
+                    val intent = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+                    val level = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+                    val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
+                    result.success(if (level >= 0 && scale > 0) level * 100 / scale else null)
                 }
                 "getThermalState" -> {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {

@@ -4,6 +4,7 @@ import 'platform_provider.dart';
 import 'settings_provider.dart';
 import 'transfer_provider.dart';
 import '../ui/widgets/performance_guard_indicator.dart';
+import '../util/logger.dart';
 
 /// 电池 / 温度保护状态
 class BatteryThermalState {
@@ -103,6 +104,8 @@ class BatteryThermalNotifier extends Notifier<BatteryThermalState> {
       final int? batteryLevel = await platform.getBatteryLevel();
       final String? thermalState = await platform.getThermalState();
 
+      Logger.log('[BATT] poll: battery=$batteryLevel thermal=$thermalState');
+
       // 无传感器（台式机）：不做任何事
       if (batteryLevel == null && thermalState == null) return;
 
@@ -123,10 +126,14 @@ class BatteryThermalNotifier extends Notifier<BatteryThermalState> {
 
       final needLimit = (isCritical && !state.dialogDismissedByUser) || isThermal;
 
+      Logger.log('[BATT] decision: isLow=$isLow isCritical=$isCritical isThermal=$isThermal needLimit=$needLimit thEnabled=$thermalEnabled lowTh=$lowThreshold critTh=$criticalThreshold');
+
       // 在 Notifier 内部直接操作速度上限（不通过 UI 层间接）
       if (needLimit && !state.autoLimitApplied) {
+        Logger.log('[BATT] APPLY auto limit 1MB/s');
         _applyAutoLimit();
       } else if (!needLimit && state.autoLimitApplied) {
+        Logger.log('[BATT] RESTORE user speed limit');
         _restoreUserLimit();
       }
 
@@ -148,8 +155,8 @@ class BatteryThermalNotifier extends Notifier<BatteryThermalState> {
           autoLimitApplied: needLimit,
         ),
       );
-    } catch (_) {
-      // 平台不支持 → 静默
+    } catch (e) {
+      Logger.log('[BATT] poll error: $e');
     }
   }
 
@@ -157,6 +164,7 @@ class BatteryThermalNotifier extends Notifier<BatteryThermalState> {
 
   void _applyAutoLimit() {
     final userLimit = ref.read(speedLimitProvider);
+    Logger.log('[BATT] _applyAutoLimit: userLimit=$userLimit autoLimit=$autoLimitBytes');
     if (userLimit == 0 || userLimit > autoLimitBytes) {
       ref.read(transferNotifierProvider.notifier).updateSpeedLimit(autoLimitBytes);
     }
@@ -164,6 +172,7 @@ class BatteryThermalNotifier extends Notifier<BatteryThermalState> {
 
   void _restoreUserLimit() {
     final userLimit = ref.read(speedLimitProvider);
+    Logger.log('[BATT] _restoreUserLimit: restoring to $userLimit');
     ref.read(transferNotifierProvider.notifier).updateSpeedLimit(userLimit);
   }
 
