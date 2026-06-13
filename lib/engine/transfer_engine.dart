@@ -620,7 +620,7 @@ class TransferSession {
         final tRead1 = DateTime.now().microsecondsSinceEpoch;
         readUs += tRead1 - tRead0;
 
-        // 零拷贝发送：68B 帧头 + 数据直接写 socket（跳过 CRC32）
+        // 零拷贝：64B 帧头 + 数据 + 4B checksum(0) 直接写 socket
         final tSend0 = DateTime.now().microsecondsSinceEpoch;
         final header = FlpFrame.buildFileDataHeader(
           transferId: transferId,
@@ -631,6 +631,7 @@ class TransferSession {
         );
         _sendRawBytes(header);
         _sendRawBytes(data);
+        _sendRawBytes(FlpFrame.zeroChecksum);
         final tSend1 = DateTime.now().microsecondsSinceEpoch;
         sendUs += tSend1 - tSend0;
 

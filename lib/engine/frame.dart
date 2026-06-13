@@ -130,8 +130,11 @@ class FlpFrame {
   String toString() =>
       'FlpFrame(type=0x${type.toRadixString(16)}, flags=$flags, payload=${payload.length}B)';
 
-  /// 构建 FILE_DATA 帧头（不含文件数据）+ checksum=0。
-  /// 返回 68 字节：16B frame header + 48B payload header + 4B checksum。
+  /// FILE_DATA 帧尾 checksum 占位（4 字节全零，接收端跳过 CRC32 校验）
+  static final Uint8List zeroChecksum = Uint8List(4);
+
+  /// 构建 FILE_DATA 帧头（64 字节，不含 checksum）。
+  /// 帧结构：[16B frame header | 48B payload header] + data + [4B zeroChecksum]
   /// 文件数据由调用方直接写入 socket，实现零拷贝。
   static Uint8List buildFileDataHeader({
     required String transferId,
@@ -141,7 +144,7 @@ class FlpFrame {
     required int dataLength,
   }) {
     final payloadLen = 48 + dataLength;
-    final result = Uint8List(headerLength + 48 + checksumLength); // 68 bytes
+    final result = Uint8List(headerLength + 48);
     final bd = ByteData.sublistView(result);
 
     // Frame header (16B)
@@ -159,9 +162,6 @@ class FlpFrame {
     bd.setUint32(ph + 32, chunkIndex, Endian.big);
     bd.setUint64(ph + 36, offset, Endian.big);
     bd.setUint32(ph + 44, dataLength, Endian.big);
-
-    // Checksum = 0（FILE_DATA 跳过 CRC32，TCP + WiFi 链路已提供完整性保证）
-    bd.setUint32(headerLength + 48, 0, Endian.big);
 
     return result;
   }
