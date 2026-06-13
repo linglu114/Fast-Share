@@ -158,18 +158,20 @@ class _FastShareAppState extends ConsumerState<FastShareApp>
         body: Stack(
           children: [
             _pages[currentIndex],
-            // 低电量通知条（非极端低电量）
+            // 低电量通知条（非极端低电量）—— 与刷新按钮同层，状态栏下方
             if (batteryThermal.isLowBattery && !batteryThermal.isCriticalBattery)
               Positioned(
-                top: 0, left: 0, right: 0,
+                top: MediaQuery.of(context).padding.top,
+                left: 0, right: 0,
                 child: _LowBatteryBanner(
                   batteryLevel: batteryThermal.batteryLevel?.toString() ?? '?',
                 ),
               ),
-            // 性能限制 indicator（右上角浮动）
+            // 性能限制 indicator — 状态栏下方右上角
             if (batteryThermal.activeLimits.isNotEmpty)
               Positioned(
-                top: 8, right: 12,
+                top: MediaQuery.of(context).padding.top + 8,
+                right: 12,
                 child: PerformanceGuardIndicator(
                   activeLimits: batteryThermal.activeLimits,
                   onTap: () =>
@@ -292,8 +294,7 @@ class _LowBatteryBannerState extends State<_LowBatteryBanner> {
   Widget build(BuildContext context) {
     if (_dismissed) return const SizedBox.shrink();
 
-    return SafeArea(
-      child: Container(
+    return Container(
         width: double.infinity,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         color: Colors.amber.shade100,
@@ -316,7 +317,6 @@ class _LowBatteryBannerState extends State<_LowBatteryBanner> {
             ),
           ],
         ),
-      ),
     );
   }
 }
