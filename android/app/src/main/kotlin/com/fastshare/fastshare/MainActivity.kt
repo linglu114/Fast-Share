@@ -67,6 +67,35 @@ class MainActivity : FlutterActivity() {
                     startService(intent)
                     result.success(true)
                 }
+                "getBatteryLevel" -> {
+                    val batteryManager = getSystemService(BATTERY_SERVICE) as? BatteryManager
+                    if (batteryManager != null) {
+                        val level = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+                        result.success(if (level >= 0) level else null)
+                    } else {
+                        result.success(null)
+                    }
+                }
+                "getThermalState" -> {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        val powerManager = getSystemService(POWER_SERVICE) as? PowerManager
+                        val status = powerManager?.currentThermalStatus ?: PowerManager.THERMAL_STATUS_NONE
+                        val stateStr = when (status) {
+                            PowerManager.THERMAL_STATUS_NONE -> "none"
+                            PowerManager.THERMAL_STATUS_LIGHT -> "light"
+                            PowerManager.THERMAL_STATUS_MODERATE -> "moderate"
+                            PowerManager.THERMAL_STATUS_SEVERE -> "severe"
+                            PowerManager.THERMAL_STATUS_CRITICAL -> "critical"
+                            PowerManager.THERMAL_STATUS_EMERGENCY -> "emergency"
+                            PowerManager.THERMAL_STATUS_SHUTDOWN -> "shutdown"
+                            else -> "unknown"
+                        }
+                        result.success(stateStr)
+                    } else {
+                        val powerManager = getSystemService(POWER_SERVICE) as? PowerManager
+                        result.success(if (powerManager?.isPowerSaveMode == true) "power_save" else "normal")
+                    }
+                }
                 else -> result.notImplemented()
             }
         }

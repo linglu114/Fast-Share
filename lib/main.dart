@@ -9,6 +9,9 @@ import 'package:uuid/uuid.dart';
 import 'storage/database.dart';
 import 'storage/settings_repository.dart';
 import 'providers/settings_provider.dart';
+import 'providers/platform_provider.dart';
+import 'platform/platform_android.dart';
+import 'platform/platform_windows.dart';
 import 'util/logger.dart';
 import 'app.dart';
 
@@ -59,6 +62,9 @@ void main() async {
     ProviderScope(
       overrides: [
         settingsRepositoryProvider.overrideWithValue(settingsRepo),
+        platformProvider.overrideWithValue(
+          Platform.isAndroid ? AndroidPlatform() : WindowsPlatform(),
+        ),
       ],
       child: const FastShareApp(),
     ),
