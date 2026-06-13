@@ -470,6 +470,7 @@ class TransferNotifier extends Notifier<void> {
         'concurrentCount': ref.read(concurrentCountProvider),
         'retryCount': settings.retryCount,
         'tempDir': tempDir,
+        'logDir': tempDir, // Engine Isolate 日志目录（Android 上 CWD 只读，需显式传入）
       },
     });
   }

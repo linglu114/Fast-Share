@@ -127,6 +127,56 @@ class FlpFrame {
   @override
   String toString() =>
       'FlpFrame(type=0x${type.toRadixString(16)}, flags=$flags, payload=${payload.length}B)';
+
+  /// 直接构建 FILE_DATA 帧的完整字节流 — 单次分配，避免 payload→frame 的二次拷贝。
+  /// 对 8MB chunk 节省 ~8MB 分配 + 一次全量内存拷贝。
+  static Uint8List buildFileDataFrame({
+    required String transferId,
+    required String fileId,
+    required int chunkIndex,
+    required int offset,
+    required Uint8List data,
+  }) {
+    final payloadLen = 48 + data.length;
+    final totalLen = headerLength + payloadLen + checksumLength;
+    final result = Uint8List(totalLen);
+    final bd = ByteData.sublistView(result);
+
+    // Frame header (16B)
+    result[0] = 0x46; result[1] = 0x53; result[2] = 0x50; result[3] = 0x31;
+    result[4] = frameVersion;
+    result[5] = FlpMessageType.fileData;
+    bd.setUint16(6, 0, Endian.big);
+    bd.setUint32(8, payloadLen, Endian.big);
+    bd.setUint32(12, 0, Endian.big);
+
+    // Binary payload header (48B within result, at offset 16)
+    final ph = headerLength;
+    result.setAll(ph, _uuidToBytes(transferId));
+    result.setAll(ph + 16, _uuidToBytes(fileId));
+    bd.setUint32(ph + 32, chunkIndex, Endian.big);
+    bd.setUint64(ph + 36, offset, Endian.big);
+    bd.setUint32(ph + 44, data.length, Endian.big);
+
+    // File data — 唯一一次拷贝
+    result.setAll(ph + 48, data);
+
+    // CRC32 over header + payload
+    final crcEnd = headerLength + payloadLen;
+    final crc = crc32(Uint8List.sublistView(result, 0, crcEnd));
+    bd.setUint32(crcEnd, crc, Endian.big);
+
+    return result;
+  }
+
+  static Uint8List _uuidToBytes(String uuid) {
+    final hex = uuid.replaceAll('-', '');
+    final bytes = Uint8List(16);
+    for (var i = 0; i < 16 && i * 2 < hex.length; i++) {
+      bytes[i] = int.parse(hex.substring(i * 2, i * 2 + 2), radix: 16);
+    }
+    return bytes;
+  }
 }
 
 /// CRC32 lookup table (IEEE 802.3 / zlib, polynomial 0xEDB88320 reflected)

@@ -18,7 +18,10 @@ class Logger {
   /// [dirPath] — writable directory for the log file.
   /// If omitted, uses the system temp directory (desktop) or skips file
   /// logging (Android, where "." is read-only).
+  /// Can be called again with a valid [dirPath] to re-init after a failed attempt.
   static void init({String? dirPath, String suffix = ''}) {
+    // If already initialized successfully and no new dirPath, skip
+    if (_file != null && dirPath == null) return;
     try {
       final dir = dirPath ??
           Platform.environment['TEMP'] ??

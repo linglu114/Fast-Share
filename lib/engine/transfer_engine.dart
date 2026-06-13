@@ -82,6 +82,12 @@ class TransferEngine {
     final concurrentCount = payload['concurrentCount'] as int? ?? 0;
     final retryCount = payload['retryCount'] as int? ?? 3;
     final tempDir = payload['tempDir'] as String?;
+    final logDir = payload['logDir'] as String?;
+
+    // Re-init Logger with a writable directory (needed on Android where CWD is read-only)
+    if (logDir != null) {
+      try { Logger.init(dirPath: logDir, suffix: '-Engine'); } catch (_) {}
+    }
 
     final session = TransferSession(
       transferId: transferId,
@@ -584,6 +590,10 @@ class TransferSession {
     }
     int offset = 0;
 
+    // 计时累积器（每 10 chunk 输出一次）
+    int readUs = 0, buildUs = 0, sendUs = 0;
+    final t0 = DateTime.now().microsecondsSinceEpoch;
+
     try {
       for (var i = 0; i < totalChunks; i++) {
         if (_cancelled) {
@@ -602,10 +612,31 @@ class TransferSession {
           await _tokenBucket!.consume(currentChunkSize);
         }
 
+        // 读文件
+        final tRead0 = DateTime.now().microsecondsSinceEpoch;
         final data = useContentUri
             ? await _requestChunk(file.fileId, file.contentUri!, i, offset, currentChunkSize)
             : await raf!.read(currentChunkSize);
-        _sendFrame(_buildFileData(file.fileId, i, offset, data));
+        final tRead1 = DateTime.now().microsecondsSinceEpoch;
+        readUs += tRead1 - tRead0;
+
+        // 构建帧（单次分配，直接产出最终字节流）
+        final tBuild0 = DateTime.now().microsecondsSinceEpoch;
+        final frameBytes = FlpFrame.buildFileDataFrame(
+          transferId: transferId,
+          fileId: file.fileId,
+          chunkIndex: i,
+          offset: offset,
+          data: data,
+        );
+        final tBuild1 = DateTime.now().microsecondsSinceEpoch;
+        buildUs += tBuild1 - tBuild0;
+
+        // 写入 socket
+        final tSend0 = DateTime.now().microsecondsSinceEpoch;
+        _sendRawFrame(frameBytes);
+        final tSend1 = DateTime.now().microsecondsSinceEpoch;
+        sendUs += tSend1 - tSend0;
 
         _bytesTransferred += currentChunkSize;
         file.bytesTransferred += currentChunkSize;
@@ -617,9 +648,17 @@ class TransferSession {
         if (i % 4 == 3 || i == totalChunks - 1) {
           await _socket?.flush();
         }
+
+        // 每 10 chunk 输出一次计时分布
+        if (i % 10 == 9 || i == totalChunks - 1) {
+          final n = (i % 10) + 1;
+          Logger.log('[ENG] chunk[$i]: read=${(readUs / n).toStringAsFixed(0)}us build=${(buildUs / n).toStringAsFixed(0)}us send=${(sendUs / n).toStringAsFixed(0)}us perChunkAvg');
+          readUs = 0; buildUs = 0; sendUs = 0;
+        }
       }
 
-      Logger.log('[ENG] all chunks sent, waiting for FILE_COMPLETE from receiver');
+      final totalUs = DateTime.now().microsecondsSinceEpoch - t0;
+      Logger.log('[ENG] all chunks sent in ${(totalUs / 1000).toStringAsFixed(0)}ms, waiting for FILE_COMPLETE from receiver');
       // 等待接收端 FILE_COMPLETE 确认（超时 120s，给慢速磁盘足够时间）
       final ackCompleter = Completer<void>();
       _ackWaiters[file.fileId] = ackCompleter;
@@ -1030,12 +1069,16 @@ class TransferSession {
   }
 
   void _sendFrame(FlpFrame frame) {
+    _sendRawFrame(frame.toBytes());
+  }
+
+  void _sendRawFrame(Uint8List bytes) {
     if (_socketClosed) return;
     try {
-      _socket?.add(frame.toBytes());
+      _socket?.add(bytes);
     } catch (e) {
       _socketClosed = true;
-      Logger.log('[ENG] _sendFrame FAILED: type=0x${frame.type.toRadixString(16)} error=$e');
+      Logger.log('[ENG] _sendRawFrame FAILED: len=${bytes.length} error=$e');
       _sendEvent('error', {
         'transferId': transferId,
         'message': 'Socket write failed: $e',
