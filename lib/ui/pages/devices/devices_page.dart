@@ -261,18 +261,6 @@ class _DevicesPageState extends ConsumerState<DevicesPage>
     final repo = TrustedDeviceRepository();
     final trusted = await repo.findByDeviceId(device.deviceId);
 
-    if (trusted != null) {
-      await connection.connect(device);
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('已连接到 ${device.name}')),
-        );
-      }
-      return;
-    }
-
-    // ── 未信任：走配对流程 ──
-
     // 1. 建立 TCP 连接
     try {
       await connection.connect(device);
@@ -285,7 +273,7 @@ class _DevicesPageState extends ConsumerState<DevicesPage>
       return;
     }
 
-    // 2. 生成配对码和 nonce
+    // 2. 生成配对码和 nonce（信任设备也发，让接收端自己决定）
     final pairCode = PairingProtocol.generatePairCode();
     final nonce = PairingProtocol.generateNonce();
 
@@ -294,7 +282,18 @@ class _DevicesPageState extends ConsumerState<DevicesPage>
 
     if (!context.mounted) return;
 
-    // 4. 双方同时显示 PIN — 发起端有确认按钮
+    // 4. 信任设备 → 本端自动确认，不弹弹窗；对端根据自己信任列表决定
+    if (trusted != null) {
+      connection.sendPairConfirm(device.deviceId, pairCode, nonce);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('已连接到 ${device.name}')),
+        );
+      }
+      return;
+    }
+
+    // 5. 双方同时显示 PIN — 发起端有确认按钮
     final confirmed = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
