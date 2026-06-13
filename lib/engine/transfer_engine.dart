@@ -390,15 +390,17 @@ class TransferSession {
       final uri = f['uri'] as String? ?? '';
       final name = f['name'] as String? ?? 'unknown';
       final size = f['size'] as int? ?? 0;
+      final fd = f['fd'] as int?;
       if (uri.isNotEmpty) {
         final id = _makeFileId(_files.length);
         _files.add(FileEntry(
           fileId: id,
-          absolutePath: uri,
+          absolutePath: fd != null ? '/proc/self/fd/$fd' : uri,
           relativePath: name,
           size: size,
           mtime: 0,
-          contentUri: uri,
+          contentUri: fd == null ? uri : null,
+          fd: fd,
         ));
         _totalSize += size;
       }
@@ -1186,6 +1188,7 @@ class FileEntry {
   final String absolutePath;
   final String relativePath;
   final String? contentUri;
+  final int? fd;
   int size;
   int mtime;
   int bytesTransferred;
@@ -1200,6 +1203,7 @@ class FileEntry {
     required this.size,
     required this.mtime,
     this.contentUri,
+    this.fd,
     this.bytesTransferred = 0,
     this.lastAckedOffset = 0,
     this.status = FileStatus.pending,

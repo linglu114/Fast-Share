@@ -4,9 +4,21 @@ import android.content.Context
 import android.content.Intent
 import android.database.Cursor
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
+import java.io.FileDescriptor
 
 object ContentUriHelper {
+
+    private val openFds = mutableMapOf<Int, ParcelFileDescriptor>()
+
+    /// Reflect FileDescriptor.fd (private int field) to get the raw fd number.
+    /// This works on all API levels and keeps ParcelFileDescriptor alive for cleanup.
+    private fun getFdNumber(fdObj: FileDescriptor): Int {
+        val field = FileDescriptor::class.java.getDeclaredField("fd")
+        field.isAccessible = true
+        return field.getInt(fdObj)
+    }
 
     fun parsePickResult(context: Context, data: Intent): List<Map<String, Any?>> {
         val files = mutableListOf<Map<String, Any?>>()
@@ -81,5 +93,29 @@ object ContentUriHelper {
         } catch (_: Exception) {
             null
         }
+    }
+
+    /// Open a content URI and return its raw file descriptor number.
+    /// Call [closeFd] to release the ParcelFileDescriptor and close the fd.
+    fun openFd(context: Context, uriStr: String): Int {
+        val uri = Uri.parse(uriStr)
+        val pfd = context.contentResolver.openFileDescriptor(uri, "r")
+            ?: throw IllegalArgumentException("Cannot open file descriptor for $uriStr")
+        val fd = getFdNumber(pfd.fileDescriptor)
+        openFds[fd] = pfd
+        return fd
+    }
+
+    /// Close a file descriptor previously opened with [openFd].
+    fun closeFd(fd: Int) {
+        openFds.remove(fd)?.close()
+    }
+
+    /// Close all open file descriptors.
+    fun closeAllFds() {
+        for (pfd in openFds.values) {
+            try { pfd.close() } catch (_: Exception) {}
+        }
+        openFds.clear()
     }
 }

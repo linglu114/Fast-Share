@@ -89,6 +89,20 @@ class MainActivity : FlutterActivity() {
                     val data = ContentUriHelper.readChunk(applicationContext, uri, offset, length)
                     result.success(data)
                 }
+                "openFd" -> {
+                    val uri = call.argument<String>("uri") ?: ""
+                    try {
+                        val fd = ContentUriHelper.openFd(applicationContext, uri)
+                        result.success(fd)
+                    } catch (e: Exception) {
+                        result.error("OPEN_FD_FAILED", e.message, null)
+                    }
+                }
+                "closeFd" -> {
+                    val fd = call.argument<Int>("fd") ?: -1
+                    ContentUriHelper.closeFd(fd)
+                    result.success(true)
+                }
                 else -> result.notImplemented()
             }
         }

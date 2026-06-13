@@ -37,4 +37,24 @@ class ContentUriReader {
     }
     return null;
   }
+
+  /// 打开 content URI 获取原始文件描述符编号。
+  /// 引擎 Isolate 可通过 /proc/self/fd/$fd 直接读取，无需 Isolate 往返。
+  static Future<int?> openFd(String uri) async {
+    if (!isSupported) return null;
+    try {
+      final fd = await _channel.invokeMethod<int>('openFd', {'uri': uri});
+      return fd;
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
+  /// 关闭之前通过 [openFd] 打开的文件描述符。
+  static Future<void> closeFd(int fd) async {
+    if (!isSupported) return;
+    try {
+      await _channel.invokeMethod('closeFd', {'fd': fd});
+    } on MissingPluginException {}
+  }
 }
