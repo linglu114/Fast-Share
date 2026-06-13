@@ -109,16 +109,18 @@ class FlpFrame {
     final payload = Uint8List(length);
     payload.setAll(0, Uint8List.sublistView(bytes, headerLength, headerLength + length));
 
-    // checksum
+    // Checksum verification — skipped for FILE_DATA (checksum==0 flag)
+    // TCP + WiFi link layer already provide integrity guarantees.
     final payloadEnd = headerLength + length;
     final expectedChecksum = bd.getUint32(payloadEnd, Endian.big);
 
-    // Verify checksum
-    final headerAndPayload = Uint8List.sublistView(bytes, 0, payloadEnd);
-    final actualChecksum = crc32(headerAndPayload);
-    if (actualChecksum != expectedChecksum) {
-      throw FlpFrameException(
-          'Checksum mismatch: expected $expectedChecksum, got $actualChecksum');
+    if (expectedChecksum != 0) {
+      final headerAndPayload = Uint8List.sublistView(bytes, 0, payloadEnd);
+      final actualChecksum = crc32(headerAndPayload);
+      if (actualChecksum != expectedChecksum) {
+        throw FlpFrameException(
+            'Checksum mismatch: expected $expectedChecksum, got $actualChecksum');
+      }
     }
 
     return FlpFrame(type: type, flags: flags, payload: payload);
@@ -128,18 +130,18 @@ class FlpFrame {
   String toString() =>
       'FlpFrame(type=0x${type.toRadixString(16)}, flags=$flags, payload=${payload.length}B)';
 
-  /// 直接构建 FILE_DATA 帧的完整字节流 — 单次分配，避免 payload→frame 的二次拷贝。
-  /// 对 8MB chunk 节省 ~8MB 分配 + 一次全量内存拷贝。
-  static Uint8List buildFileDataFrame({
+  /// 构建 FILE_DATA 帧头（不含文件数据）+ checksum=0。
+  /// 返回 68 字节：16B frame header + 48B payload header + 4B checksum。
+  /// 文件数据由调用方直接写入 socket，实现零拷贝。
+  static Uint8List buildFileDataHeader({
     required String transferId,
     required String fileId,
     required int chunkIndex,
     required int offset,
-    required Uint8List data,
+    required int dataLength,
   }) {
-    final payloadLen = 48 + data.length;
-    final totalLen = headerLength + payloadLen + checksumLength;
-    final result = Uint8List(totalLen);
+    final payloadLen = 48 + dataLength;
+    final result = Uint8List(headerLength + 48 + checksumLength); // 68 bytes
     final bd = ByteData.sublistView(result);
 
     // Frame header (16B)
@@ -150,21 +152,16 @@ class FlpFrame {
     bd.setUint32(8, payloadLen, Endian.big);
     bd.setUint32(12, 0, Endian.big);
 
-    // Binary payload header (48B within result, at offset 16)
+    // Binary payload header (48B)
     final ph = headerLength;
     result.setAll(ph, _uuidToBytes(transferId));
     result.setAll(ph + 16, _uuidToBytes(fileId));
     bd.setUint32(ph + 32, chunkIndex, Endian.big);
     bd.setUint64(ph + 36, offset, Endian.big);
-    bd.setUint32(ph + 44, data.length, Endian.big);
+    bd.setUint32(ph + 44, dataLength, Endian.big);
 
-    // File data — 唯一一次拷贝
-    result.setAll(ph + 48, data);
-
-    // CRC32 over header + payload
-    final crcEnd = headerLength + payloadLen;
-    final crc = crc32(Uint8List.sublistView(result, 0, crcEnd));
-    bd.setUint32(crcEnd, crc, Endian.big);
+    // Checksum = 0（FILE_DATA 跳过 CRC32，TCP + WiFi 链路已提供完整性保证）
+    bd.setUint32(headerLength + 48, 0, Endian.big);
 
     return result;
   }

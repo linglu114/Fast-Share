@@ -575,7 +575,7 @@ class TransferSession {
     }
   }
 
-  /// 单文件顺序传输
+  /// 单文件顺序传输（零拷贝：header + raf.read() 直接写 socket，无 CRC32）
   Future<void> _transferSingleFile(FileEntry file) async {
     final totalChunks = (file.size / chunkSize).ceil();
     final useContentUri = file.contentUri != null;
@@ -591,7 +591,7 @@ class TransferSession {
     int offset = 0;
 
     // 计时累积器（每 10 chunk 输出一次）
-    int readUs = 0, buildUs = 0, sendUs = 0;
+    int readUs = 0, sendUs = 0;
     final t0 = DateTime.now().microsecondsSinceEpoch;
 
     try {
@@ -620,21 +620,17 @@ class TransferSession {
         final tRead1 = DateTime.now().microsecondsSinceEpoch;
         readUs += tRead1 - tRead0;
 
-        // 构建帧（单次分配，直接产出最终字节流）
-        final tBuild0 = DateTime.now().microsecondsSinceEpoch;
-        final frameBytes = FlpFrame.buildFileDataFrame(
+        // 零拷贝发送：68B 帧头 + 数据直接写 socket（跳过 CRC32）
+        final tSend0 = DateTime.now().microsecondsSinceEpoch;
+        final header = FlpFrame.buildFileDataHeader(
           transferId: transferId,
           fileId: file.fileId,
           chunkIndex: i,
           offset: offset,
-          data: data,
+          dataLength: currentChunkSize,
         );
-        final tBuild1 = DateTime.now().microsecondsSinceEpoch;
-        buildUs += tBuild1 - tBuild0;
-
-        // 写入 socket
-        final tSend0 = DateTime.now().microsecondsSinceEpoch;
-        _sendRawFrame(frameBytes);
+        _sendRawBytes(header);
+        _sendRawBytes(data);
         final tSend1 = DateTime.now().microsecondsSinceEpoch;
         sendUs += tSend1 - tSend0;
 
@@ -652,8 +648,8 @@ class TransferSession {
         // 每 10 chunk 输出一次计时分布
         if (i % 10 == 9 || i == totalChunks - 1) {
           final n = (i % 10) + 1;
-          Logger.log('[ENG] chunk[$i]: read=${(readUs / n).toStringAsFixed(0)}us build=${(buildUs / n).toStringAsFixed(0)}us send=${(sendUs / n).toStringAsFixed(0)}us perChunkAvg');
-          readUs = 0; buildUs = 0; sendUs = 0;
+          Logger.log('[ENG] chunk[$i]: read=${(readUs / n).toStringAsFixed(0)}us send=${(sendUs / n).toStringAsFixed(0)}us perChunkAvg');
+          readUs = 0; sendUs = 0;
         }
       }
 
@@ -1043,22 +1039,6 @@ class TransferSession {
     return FlpFrame(type: FlpMessageType.fileMeta, payload: payload);
   }
 
-  FlpFrame _buildFileData(
-      String fileId, int chunkIndex, int offset, Uint8List data) {
-    // Binary payload: transferId(16) + fileId(16) + chunkIndex(4) + offset(8) + dataLength(4) + data(N)
-    final payload = Uint8List(48 + data.length);
-    final bd = ByteData.sublistView(payload);
-
-    payload.setAll(0, _uuidToBytes(transferId));
-    payload.setAll(16, _uuidToBytes(fileId));
-    bd.setUint32(32, chunkIndex, Endian.big);
-    bd.setUint64(36, offset, Endian.big);
-    bd.setUint32(44, data.length, Endian.big);
-    payload.setAll(48, data);
-
-    return FlpFrame(type: FlpMessageType.fileData, payload: payload);
-  }
-
   static Uint8List _uuidToBytes(String uuid) {
     final hex = uuid.replaceAll('-', '');
     final bytes = Uint8List(16);
@@ -1069,16 +1049,16 @@ class TransferSession {
   }
 
   void _sendFrame(FlpFrame frame) {
-    _sendRawFrame(frame.toBytes());
+    _sendRawBytes(frame.toBytes());
   }
 
-  void _sendRawFrame(Uint8List bytes) {
+  void _sendRawBytes(Uint8List bytes) {
     if (_socketClosed) return;
     try {
       _socket?.add(bytes);
     } catch (e) {
       _socketClosed = true;
-      Logger.log('[ENG] _sendRawFrame FAILED: len=${bytes.length} error=$e');
+      Logger.log('[ENG] _sendRawBytes FAILED: len=${bytes.length} error=$e');
       _sendEvent('error', {
         'transferId': transferId,
         'message': 'Socket write failed: $e',
