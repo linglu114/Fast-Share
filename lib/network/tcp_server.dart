@@ -68,6 +68,7 @@ class TcpConnection {
   TcpConnection(this.socket)
       : id = '${socket.remoteAddress.address}:${socket.remotePort}',
         connectedAt = DateTime.now() {
+    socket.setOption(SocketOption.tcpNoDelay, true);
     socket.listen(
       _onData,
       onError: (error) {

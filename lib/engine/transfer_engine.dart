@@ -254,6 +254,7 @@ class TransferSession {
     try {
       _socket = await Socket.connect(targetIp, targetPort,
           timeout: const Duration(seconds: 10));
+      _socket!.setOption(SocketOption.tcpNoDelay, true);
     } catch (e) {
       _sendEvent('error', {
         'transferId': transferId,
