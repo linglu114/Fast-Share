@@ -278,7 +278,7 @@ class DiscoveryService {
     final offlineIds = <String>[];
 
     for (final entry in _devices.entries) {
-      if (now.difference(entry.value.lastSeen).inSeconds > 15) {
+      if (now.difference(entry.value.lastSeen).inSeconds > 30) {
         offlineIds.add(entry.key);
       }
     }

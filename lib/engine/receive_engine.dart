@@ -3,10 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
-import '../util/constants.dart';
 import '../util/logger.dart';
 import 'frame.dart';
-import 'performance_guard.dart';
 
 /// Receive Engine Isolate (FLP v1.2 §8)
 ///
@@ -35,7 +33,9 @@ class ReceiveEngine {
 
   String? _transferId;
   String? _saveRoot;
+  String? _fallbackRoot;
   bool _cancelled = false;
+  String? _lastError;
   List<Map<String, dynamic>> _pendingFiles = []; // for directory pre-creation
 
   final Map<String, _ReceivingFile> _files = {};
@@ -109,10 +109,11 @@ class ReceiveEngine {
   void _start(Map<String, dynamic> payload) {
     _transferId = payload['transferId'] as String;
     _saveRoot = payload['savePath'] as String;
+    _fallbackRoot = payload['fallbackPath'] as String?;
     _lastFileIdStr = null;
     _lastFile = null;
     _lastFileIdBytes = null;
-    Logger.log('[RECV] _start: transferId=$_transferId saveRoot=$_saveRoot');
+    Logger.log('[RECV] _start: transferId=$_transferId saveRoot=$_saveRoot fallbackRoot=$_fallbackRoot');
 
     // Pre-create directory structure from pending file list
     if (_pendingFiles.isNotEmpty) {
@@ -198,9 +199,10 @@ class ReceiveEngine {
         _handleFileData(frame);
       }
     } catch (e) {
+      _lastError = 'Frame parse failed: $e';
       _sendEvent('error', {
         'transferId': _transferId,
-        'message': 'Frame parse failed: $e',
+        'message': _lastError,
       });
       _sendTransferComplete(false);
       _cancel();
@@ -214,65 +216,80 @@ class ReceiveEngine {
   void _handleFileMeta(FlpFrame frame) {
     if (_cancelled) return;
 
-    try {
-      final json = jsonDecode(utf8.decode(frame.payload)) as Map<String, dynamic>;
-      final fileId = json['fileId'] as String;
-      final relativePath = (json['relativePath'] as String).replaceAll('\\', '/');
-      final size = json['size'] as int;
-      final chunkSize = json['chunkSize'] as int? ?? 1048576;
+    final json = jsonDecode(utf8.decode(frame.payload)) as Map<String, dynamic>;
+    final fileId = json['fileId'] as String;
+    final relativePath = (json['relativePath'] as String).replaceAll('\\', '/');
+    final size = json['size'] as int;
+    final chunkSize = json['chunkSize'] as int? ?? 1048576;
 
-      Logger.log('[RECV] handleFileMeta: transferId=$_transferId fileId=$fileId path=$relativePath size=$size');
+    Logger.log('[RECV] handleFileMeta: transferId=$_transferId fileId=$fileId path=$relativePath size=$size');
 
-      if (_files.containsKey(fileId)) {
-        Logger.log('[RECV] handleFileMeta: skipping duplicate fileId=$fileId');
-        return;
-      }
+    if (_files.containsKey(fileId)) {
+      Logger.log('[RECV] handleFileMeta: skipping duplicate fileId=$fileId');
+      return;
+    }
 
-      // Ensure save root exists
-      final rootDir = Directory(_saveRoot!);
-      if (!rootDir.existsSync()) {
-        rootDir.createSync(recursive: true);
-      }
+    RandomAccessFile? raf;
+    String? filePath;
 
-      // Build save path: saveRoot/relativePath
-      final parts = relativePath.split('/');
-      if (parts.length > 1) {
-        final subDir = Directory('${_saveRoot!}/${parts.sublist(0, parts.length - 1).join('/')}');
-        if (!subDir.existsSync()) {
-          subDir.createSync(recursive: true);
+    // Try primary path first, then fallback
+    for (final root in <String>[_saveRoot!, if (_fallbackRoot != null) _fallbackRoot!]) {
+      try {
+        final rootDir = Directory(root);
+        if (!rootDir.existsSync()) {
+          rootDir.createSync(recursive: true);
+        }
+
+        final parts = relativePath.split('/');
+        if (parts.length > 1) {
+          final subDir = Directory('$root/${parts.sublist(0, parts.length - 1).join('/')}');
+          if (!subDir.existsSync()) {
+            subDir.createSync(recursive: true);
+          }
+        }
+
+        filePath = '$root/$relativePath';
+        raf = File(filePath).openSync(mode: FileMode.write);
+        if (root != _saveRoot) {
+          Logger.log('[RECV] handleFileMeta: using fallback path $filePath');
+        }
+        break;
+      } catch (e) {
+        Logger.log('[RECV] handleFileMeta: path $root failed: $e');
+        if (root == _fallbackRoot || _fallbackRoot == null) {
+          _lastError = 'FILE_META failed: $e (path: $root)';
+          Logger.log('[RECV] handleFileMeta FAILED: $e (path: $root)');
+          _sendEvent('error', {
+            'transferId': _transferId,
+            'message': _lastError,
+          });
+          _sendTransferComplete(false);
+          _cancel();
+          return;
         }
       }
-
-      final filePath = '${_saveRoot!}/$relativePath';
-      final raf = File(filePath).openSync(mode: FileMode.write);
-
-      _files[fileId] = _ReceivingFile(
-        fileId: fileId,
-        relativePath: relativePath,
-        size: size,
-        chunkSize: chunkSize,
-        raf: raf,
-        filePath: filePath,
-      );
-
-      _pendingSize += size;
-      _startProgress();
-
-      _sendEvent('file_meta_received', {
-        'transferId': _transferId,
-        'fileId': fileId,
-        'relativePath': relativePath,
-        'size': size,
-      });
-    } catch (e, stack) {
-      Logger.log('[RECV] handleFileMeta FAILED: $e\n$stack');
-      _sendEvent('error', {
-        'transferId': _transferId,
-        'message': 'FILE_META failed: $e',
-      });
-      _sendTransferComplete(false);
-      _cancel();
     }
+
+    if (raf == null || filePath == null) return; // unreachable, but safe
+
+    _files[fileId] = _ReceivingFile(
+      fileId: fileId,
+      relativePath: relativePath,
+      size: size,
+      chunkSize: chunkSize,
+      raf: raf,
+      filePath: filePath,
+    );
+
+    _pendingSize += size;
+    _startProgress();
+
+    _sendEvent('file_meta_received', {
+      'transferId': _transferId,
+      'fileId': fileId,
+      'relativePath': relativePath,
+      'size': size,
+    });
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -351,9 +368,10 @@ class ReceiveEngine {
         _onFileComplete(rf.fileId);
       }
     } catch (e) {
+      _lastError = 'FILE_DATA write failed: $e';
       _sendEvent('error', {
         'transferId': _transferId,
-        'message': 'FILE_DATA write failed: $e',
+        'message': _lastError,
       });
       _sendTransferComplete(false);
       _cancel();
@@ -438,12 +456,13 @@ class ReceiveEngine {
   }
 
   void _sendTransferComplete(bool success) {
-    Logger.log('[RECV] _sendTransferComplete: success=$success totalWritten=$_totalBytesWritten pendingSize=$_pendingSize files=${_files.length}');
+    Logger.log('[RECV] _sendTransferComplete: success=$success totalWritten=$_totalBytesWritten pendingSize=$_pendingSize files=${_files.length} error=$_lastError');
     Logger.flushSync(); // Ensure logs survive Isolate exit
     final payload = utf8.encode(jsonEncode({
       'transferId': _transferId,
       'success': success,
       'failedFiles': _files.values.where((f) => f.bytesWritten < f.size).length,
+      if (_lastError != null) 'error': _lastError,
     }));
     final frame = FlpFrame(type: FlpMessageType.transferComplete, payload: Uint8List.fromList(payload));
     _sendFrameToUi(frame);

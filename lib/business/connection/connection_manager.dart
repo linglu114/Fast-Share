@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
 import '../../models/device.dart';
 import '../../engine/frame.dart';
 import '../../engine/session.dart';
@@ -477,6 +478,12 @@ class ConnectionManager {
     final receivePort = ReceivePort();
     SendPort? enginePort;
 
+    // Get fallback save path in case the primary path fails (e.g. Android permission issue)
+    String? fallbackPath;
+    try {
+      fallbackPath = (await getTemporaryDirectory()).path;
+    } catch (_) {}
+
     try {
       await Isolate.spawn(ReceiveEngine.entry, receivePort.sendPort);
     } catch (e) {
@@ -500,10 +507,14 @@ class ConnectionManager {
         enginePort = data['enginePort'] as SendPort;
         _receiveEngines[transferId] = enginePort!;
 
-        // Send start command
+        // Send start command with fallback path
         enginePort!.send({
           'type': 'start',
-          'payload': {'transferId': transferId, 'savePath': savePath},
+          'payload': {
+            'transferId': transferId,
+            'savePath': savePath,
+            if (fallbackPath != null) 'fallbackPath': fallbackPath,
+          },
         });
 
         // Flush buffered raw frames

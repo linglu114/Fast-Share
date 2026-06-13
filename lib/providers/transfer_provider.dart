@@ -332,6 +332,20 @@ class TransferNotifier extends Notifier<void> {
       if (active?.transferId == transferId && active != null) {
         _saveHistory(active, 'failed');
       }
+
+      // Remove from queue
+      final queue = ref.read(transferQueueProvider);
+      ref.read(transferQueueProvider.notifier).state =
+          queue.where((t) => t.transferId != transferId).toList();
+    }
+
+    // Clean up if no more transfers in queue
+    if (ref.read(transferQueueProvider).isEmpty) {
+      ForegroundServiceManager().stop();
+      _engineIsolate?.then((i) => i.kill());
+      _engineIsolate = null;
+      _engineSendPort = null;
+      _ensureEngineReady = null;
     }
   }
 

@@ -937,16 +937,26 @@ class TransferSession {
 
     // Parse receiver's success flag
     bool success = true;
+    String? errorDetail;
     try {
       final payload = jsonDecode(utf8.decode(frame.payload)) as Map<String, dynamic>;
       success = payload['success'] as bool? ?? true;
-      Logger.log('[ENG] TRANSFER_COMPLETE success=$success failedFiles=${payload['failedFiles']}');
+      errorDetail = payload['error'] as String?;
+      Logger.log('[ENG] TRANSFER_COMPLETE success=$success failedFiles=${payload['failedFiles']} error=$errorDetail');
     } catch (_) {}
 
     if (!success) {
+      _cancelled = true;
+      // Stop chunk loops and prevent _executeTransfer from timing out
+      if (_allFilesDone != null && !_allFilesDone!.isCompleted) {
+        _allFilesDone!.complete();
+      }
+      _cleanupCacheFiles();
+      try { _socket?.close(); } catch (_) {}
+      _socketClosed = true;
       _sendEvent('error', {
         'transferId': transferId,
-        'message': 'Transfer failed on receiver side',
+        'message': errorDetail ?? 'Transfer failed on receiver side',
       });
       return;
     }
