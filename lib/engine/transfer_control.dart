@@ -102,6 +102,25 @@ class TransferControlMessages {
     );
   }
 
+  /// 构建 TRANSFER_SPEED_LIMIT (0x36) — 接收端通知发送端调整限速
+  static FlpFrame buildSpeedLimit({
+    required String transferId,
+    required int bytesPerSecond,
+  }) {
+    final payload = jsonEncode({
+      'transferId': transferId,
+      'speedLimit': bytesPerSecond,
+    });
+    return FlpFrame(
+      type: FlpMessageType.transferSpeedLimit,
+      payload: Uint8List.fromList(utf8.encode(payload)),
+    );
+  }
+
+  static Map<String, dynamic> parseSpeedLimit(FlpFrame frame) {
+    return jsonDecode(utf8.decode(frame.payload));
+  }
+
   /// 构建 ERROR (0x50)
   static FlpFrame buildError({
     required String code,

@@ -373,6 +373,10 @@ class ConnectionNotifier extends Notifier<Map<String, bool>> {
     _manager?.rejectTransfer(deviceId, transferId);
   }
 
+  void setReceiveSpeedLimit(String transferId, int bytesPerSecond) {
+    _manager?.setReceiveSpeedLimit(transferId, bytesPerSecond);
+  }
+
   void cancelReceiveTransfer(String deviceId, String transferId) {
     Logger.log('[CN] cancelReceiveTransfer: deviceId=$deviceId transferId=$transferId');
     _manager?.cancelReceiveTransfer(deviceId, transferId);

@@ -11,6 +11,7 @@ import '../util/logger.dart';
 import '../platform/foreground_service_manager.dart';
 import '../platform/content_uri_reader.dart';
 import 'settings_provider.dart';
+import 'connection_provider.dart';
 import '../models/history_record.dart';
 import '../storage/history_repository.dart';
 
@@ -543,9 +544,15 @@ class TransferNotifier extends Notifier<void> {
   }
 
   /// 运行时动态调整传输限速（供设置变更 / 电池保护触发）
+  ///
+  /// 发送端：直接调整发送 Engine 的 TokenBucket
+  /// 接收端：通过 RecvEngine 发送 TRANSFER_SPEED_LIMIT 帧通知发送端
   void updateSpeedLimit(int bytesPerSecond) {
     final active = ref.read(activeTransferProvider);
+    final receive = ref.read(receiveTransferProvider);
+
     if (active != null) {
+      // 本机是发送端 — 直接调整 Engine TokenBucket
       _engineSendPort?.send({
         'type': EngineCommandType.setSpeedLimit,
         'payload': {
@@ -553,6 +560,13 @@ class TransferNotifier extends Notifier<void> {
           'speedLimit': bytesPerSecond,
         },
       });
+    }
+
+    if (receive != null) {
+      // 本机是接收端 — 转发到 RecvEngine，由其发送 TRANSFER_SPEED_LIMIT 帧给发送端
+      ref.read(connectionStateProvider.notifier).setReceiveSpeedLimit(
+        receive.transferId, bytesPerSecond,
+      );
     }
   }
 

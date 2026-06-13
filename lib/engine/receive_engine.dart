@@ -34,6 +34,7 @@ class ReceiveEngine {
   String? _transferId;
   String? _saveRoot;
   String? _fallbackRoot;
+  bool _paused = false;
   bool _cancelled = false;
   String? _lastError;
   List<Map<String, dynamic>> _pendingFiles = []; // for directory pre-creation
@@ -96,6 +97,9 @@ class ReceiveEngine {
       case 'cancel':
         _cancel();
         break;
+      case 'set_speed_limit':
+        _handleSpeedLimitCommand(payload);
+        break;
       case 'shutdown':
         _shutdown();
         break;
@@ -150,12 +154,14 @@ class ReceiveEngine {
   }
 
   void _pause() {
+    _paused = true;
     _ackTimer?.cancel();
     _ackTimer = null;
     _stopProgress();
   }
 
   void _resume() {
+    _paused = false;
     _lastSpeedBytes = _totalBytesWritten;
     _startProgress();
   }
@@ -181,12 +187,31 @@ class ReceiveEngine {
     _commandPort.close();
   }
 
+  /// 接收端本地限速触发 → 通过 TRANSFER_SPEED_LIMIT 帧通知发送端
+  void _handleSpeedLimitCommand(Map<String, dynamic> payload) {
+    final bytesPerSecond = payload['speedLimit'] as int? ?? 0;
+    Logger.log('[RECV] handleSpeedLimitCommand: $bytesPerSecond B/s');
+    try {
+      // 构建 SPEED_LIMIT 帧，通过 ack_frame 通道发往发送端
+      final frame = FlpFrame(
+        type: FlpMessageType.transferSpeedLimit,
+        payload: Uint8List.fromList(utf8.encode(jsonEncode({
+          'transferId': _transferId,
+          'speedLimit': bytesPerSecond,
+        }))),
+      );
+      _sendFrameToUi(frame);
+    } catch (e) {
+      Logger.log('[RECV] handleSpeedLimitCommand error: $e');
+    }
+  }
+
   // ═══════════════════════════════════════════════════════════
   // Frame processing (CRC32 in this Isolate)
   // ═══════════════════════════════════════════════════════════
 
   void _handleData(Map<String, dynamic> payload) {
-    if (_cancelled || _transferId == null) return;
+    if (_paused || _cancelled || _transferId == null) return;
 
     final rawBytes = payload['rawBytes'] as Uint8List;
 

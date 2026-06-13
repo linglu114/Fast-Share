@@ -255,6 +255,7 @@ class FlpMessageType {
   static const int fileNack = 0x33;
   static const int fileComplete = 0x34;
   static const int transferComplete = 0x35;
+  static const int transferSpeedLimit = 0x36; // 运行时限速同步 (FLP v1.2 §7.5)
 
   static const int clipboardPush = 0x40;
   static const int clipboardAck = 0x41;

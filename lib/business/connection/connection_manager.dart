@@ -573,6 +573,15 @@ class ConnectionManager {
     });
   }
 
+  /// 通知接收端 Engine 向发送端转发 SPEED_LIMIT 帧
+  void setReceiveSpeedLimit(String transferId, int bytesPerSecond) {
+    Logger.log('[CM] setReceiveSpeedLimit: transferId=$transferId limit=$bytesPerSecond');
+    _receiveEngines[transferId]?.send({
+      'type': 'set_speed_limit',
+      'payload': {'speedLimit': bytesPerSecond},
+    });
+  }
+
   /// 取消正在接收的传输（接收端主动取消）
   void cancelReceiveTransfer(String deviceId, String transferId) {
     Logger.log('[CM] cancelReceiveTransfer: deviceId=$deviceId transferId=$transferId');

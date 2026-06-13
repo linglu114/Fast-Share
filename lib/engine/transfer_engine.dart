@@ -956,6 +956,9 @@ class TransferSession {
       case FlpMessageType.transferComplete:
         _onTransferCompleteReceived(frame);
         break;
+      case FlpMessageType.transferSpeedLimit:
+        _onSpeedLimitReceived(frame);
+        break;
       case FlpMessageType.pong:
         break;
       default:
@@ -1096,6 +1099,17 @@ class TransferSession {
     _cleanupCacheFiles();
     if (_allFilesDone != null && !_allFilesDone!.isCompleted) {
       _allFilesDone!.complete();
+    }
+  }
+
+  void _onSpeedLimitReceived(FlpFrame frame) {
+    try {
+      final json = jsonDecode(utf8.decode(frame.payload)) as Map<String, dynamic>;
+      final limit = json['speedLimit'] as int? ?? 0;
+      Logger.log('[ENG] SPEED_LIMIT received: limit=$limit B/s');
+      setSpeedLimit(limit);
+    } catch (e) {
+      Logger.log('[ENG] SPEED_LIMIT parse failed: $e');
     }
   }
 
