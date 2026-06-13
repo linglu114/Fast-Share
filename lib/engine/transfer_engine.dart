@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
-import 'dart:math';
+import 'dart:math' show min;
 import 'dart:typed_data';
 import 'package:path/path.dart' as p;
 import '../util/constants.dart';
@@ -60,6 +60,13 @@ class TransferEngine {
         break;
       case 'shutdown':
         _commandPort.close();
+        break;
+      case 'set_speed_limit':
+        final tid = payload['transferId'] as String?;
+        final limit = payload['speedLimit'] as int? ?? 0;
+        if (tid != null) {
+          _sessions[tid]?.setSpeedLimit(limit);
+        }
         break;
     }
   }
@@ -277,9 +284,6 @@ class TransferSession {
     _collectFileSizes();
     _sendFileListChunk();
     _strategy = _decideStrategy();
-    if (concurrentCount == 0) {
-      concurrentCount = _files.length < 200 ? _randomInRange(3, 6) : _randomInRange(4, 8);
-    }
 
     // 阶段 4: 发送 TRANSFER_OFFER，等待接收端 TRANSFER_ACCEPT
     _sendTransferOffer();
@@ -358,6 +362,7 @@ class TransferSession {
     _cancelled = true;
     _progressTimer?.cancel();
     _stopHeartbeat();
+    _stopConcurrencyMonitor();
     _tokenBucket?.stop();
     for (final c in _ackWaiters.values) {
       if (!c.isCompleted) c.complete();
@@ -384,6 +389,22 @@ class TransferSession {
       _socket?.close();
     } catch (_) {}
     _cleanupCacheFiles();
+  }
+
+  /// 动态调整传输限速（运行时可被 UI 侧电池/温度保护触发）
+  void setSpeedLimit(int bytesPerSecond) {
+    if (bytesPerSecond <= 0) {
+      _tokenBucket?.stop();
+      _tokenBucket = null;
+      Logger.log('[ENG] setSpeedLimit: disabled (unlimited)');
+    } else if (_tokenBucket == null) {
+      _tokenBucket = TokenBucket(bytesPerSecond);
+      Logger.log('[ENG] setSpeedLimit: enabled at ${bytesPerSecond} B/s');
+    } else {
+      _tokenBucket!.stop();
+      _tokenBucket = TokenBucket(bytesPerSecond);
+      Logger.log('[ENG] setSpeedLimit: updated to ${bytesPerSecond} B/s');
+    }
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -538,6 +559,29 @@ class TransferSession {
     _stopHeartbeat(); // 传输期间数据流即为心跳，避免 PING 和 FILE_DATA 竞争 socket
     _allFilesDone = Completer<void>(); // 必须在传文件之前创建，否则 TRANSFER_COMPLETE 可能丢失
 
+    // 自动模式：初始化动态并发调整器
+    if (concurrentCount == 0) {
+      _concurrencyAdjuster = DynamicConcurrency(
+        initialConcurrency: _files.length < 50 ? 3 : 4,
+        minConcurrency: 1,
+        maxConcurrency: 8,
+        onConcurrencyChanged: (newCount) {
+          if (newCount != concurrentCount) {
+            final old = concurrentCount;
+            concurrentCount = newCount;
+            Logger.log('[ENG] concurrency: $old → $newCount (auto-adjusted)');
+            _sendEvent('concurrency_changed', {
+              'transferId': transferId,
+              'concurrency': newCount,
+              'reason': 'auto',
+            });
+          }
+        },
+      );
+      concurrentCount = _concurrencyAdjuster!.initialConcurrency;
+      _startConcurrencyMonitor();
+    }
+
     if (_strategy == TransferStrategy.sequential ||
         _strategy == TransferStrategy.mixed) {
       // 先传大文件
@@ -557,6 +601,8 @@ class TransferSession {
       final smallFiles = _files.where((f) => f.size < largeFileThreshold).toList();
       await _transferFilesConcurrent(smallFiles);
     }
+
+    _stopConcurrencyMonitor();
 
     if (!_cancelled) {
       // 等待接收端 TRANSFER_COMPLETE 确认
@@ -732,27 +778,62 @@ class TransferSession {
     }
   }
 
-  /// 并发传输多个文件 (worker-pool 模式)
+  /// 并发传输多个文件 (动态 worker-pool 模式)
+  ///
+  /// 工作线程在每次取文件前检查并发数：若当前运行数超出目标，则优雅退出。
+  /// 周期性检查并发数变化，自动扩缩容。
   Future<void> _transferFilesConcurrent(List<FileEntry> files) async {
     final allFiles = List<FileEntry>.from(files);
     int nextIndex = 0;
+    int runningCount = 0;
 
     Future<void> worker() async {
-      while (nextIndex < allFiles.length && !_cancelled) {
-        while (_paused && !_cancelled) {
-          await Future.delayed(const Duration(milliseconds: 100));
-        }
-        if (_cancelled) return;
+      runningCount++;
+      try {
+        while (!_cancelled) {
+          while (_paused && !_cancelled) {
+            await Future.delayed(const Duration(milliseconds: 100));
+          }
+          if (_cancelled) return;
 
-        final idx = nextIndex;
-        nextIndex++;
-        await _transferSingleFile(allFiles[idx]);
+          // 降级：当前运行数超出目标并发 → 本 worker 退出
+          if (runningCount > concurrentCount) return;
+
+          // 无剩余文件
+          if (nextIndex >= allFiles.length) return;
+
+          final file = allFiles[nextIndex];
+          nextIndex++;
+          await _transferSingleFile(file);
+        }
+      } finally {
+        runningCount--;
       }
     }
 
-    final workerCount = concurrentCount.clamp(1, allFiles.length);
-    final workers = List.generate(workerCount, (_) => worker());
-    await Future.wait(workers);
+    // 启动初始 worker pool
+    final futures = <Future<void>>[];
+    final initialCount = concurrentCount.clamp(1, allFiles.length);
+    for (var i = 0; i < initialCount; i++) {
+      futures.add(worker());
+    }
+
+    // 伸缩定时器：检测并发数上调时补充 worker
+    Timer? scaleTimer;
+    scaleTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_cancelled || nextIndex >= allFiles.length) {
+        timer.cancel();
+        return;
+      }
+      while (runningCount < concurrentCount &&
+          nextIndex < allFiles.length &&
+          !_cancelled) {
+        futures.add(worker());
+      }
+    });
+
+    await Future.wait(futures);
+    scaleTimer?.cancel();
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -1104,6 +1185,32 @@ class TransferSession {
   }
 
   // ═══════════════════════════════════════════════════════════
+  // 动态并发监控 (5s 周期，基于吞吐量趋势自动调整)
+  // ═══════════════════════════════════════════════════════════
+
+  Timer? _concurrencyTimer;
+
+  void _startConcurrencyMonitor() {
+    if (_concurrencyAdjuster == null) return;
+    _concurrencyTimer?.cancel();
+    _concurrencyTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (_cancelled || _completed) {
+        _concurrencyTimer?.cancel();
+        return;
+      }
+      _concurrencyAdjuster!.adjust(
+        currentThroughput: _avgSpeed(),
+      );
+    });
+  }
+
+  void _stopConcurrencyMonitor() {
+    _concurrencyTimer?.cancel();
+    _concurrencyTimer = null;
+    _concurrencyAdjuster = null;
+  }
+
+  // ═══════════════════════════════════════════════════════════
   // 进度汇报 (去抖 ≤10次/秒)
   // ═══════════════════════════════════════════════════════════
 
@@ -1210,9 +1317,6 @@ class TransferSession {
       waiter.complete(data ?? Uint8List(0));
     }
   }
-
-  int _randomInRange(int min, int max) =>
-      min + Random().nextInt(max - min + 1);
 }
 
 // ═══════════════════════════════════════════════════════════

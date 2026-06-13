@@ -141,6 +141,9 @@ class TransferNotifier extends Notifier<void> {
       case 'error':
         _onError(data);
         break;
+      case 'concurrency_changed':
+        _onConcurrencyChanged(data);
+        break;
     }
   }
 
@@ -351,6 +354,19 @@ class TransferNotifier extends Notifier<void> {
     }
   }
 
+  void _onConcurrencyChanged(Map<String, dynamic> data) {
+    final transferId = data['transferId'] as String?;
+    final concurrency = data['concurrency'] as int? ?? 0;
+    if (transferId != null) {
+      ref.read(activeTransferProvider.notifier).update((task) {
+        if (task?.transferId == transferId) {
+          task!.concurrentCount = concurrency;
+        }
+        return task?.clone();
+      });
+    }
+  }
+
   void _onRequestChunk(Map<String, dynamic> data) async {
     final transferId = data['transferId'] as String? ?? '';
     final fileId = data['fileId'] as String? ?? '';
@@ -524,6 +540,20 @@ class TransferNotifier extends Notifier<void> {
     final queue = ref.read(transferQueueProvider);
     ref.read(transferQueueProvider.notifier).state =
         queue.where((t) => t.transferId != transferId).toList();
+  }
+
+  /// 运行时动态调整传输限速（供设置变更 / 电池保护触发）
+  void updateSpeedLimit(int bytesPerSecond) {
+    final active = ref.read(activeTransferProvider);
+    if (active != null) {
+      _engineSendPort?.send({
+        'type': EngineCommandType.setSpeedLimit,
+        'payload': {
+          'transferId': active.transferId,
+          'speedLimit': bytesPerSecond,
+        },
+      });
+    }
   }
 
   TransferMode _parseMode(String? mode) {

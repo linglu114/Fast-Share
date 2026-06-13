@@ -39,6 +39,7 @@ class EngineCommandType {
   static const String resume = 'resume';
   static const String cancel = 'cancel';
   static const String shutdown = 'shutdown';
+  static const String setSpeedLimit = 'set_speed_limit';
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -56,4 +57,5 @@ class EngineEventType {
   static const String modeChange = 'mode_change';
   static const String lowPerformance = 'low_performance';
   static const String diskFull = 'disk_full';
+  static const String concurrencyChanged = 'concurrency_changed';
 }

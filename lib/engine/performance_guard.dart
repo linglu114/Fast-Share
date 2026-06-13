@@ -176,12 +176,15 @@ class DynamicConcurrency {
 
   int get current => _currentConcurrency;
 
-  /// 根据性能指标调整并发数
+  /// 根据性能指标调整并发数。
+  ///
+  /// [uiFps] / [diskWriteLatencyMs] / [engineMemoryMB] 为可选指标，传 -1 表示跳过该检查。
+  /// 在 Engine Isolate 中通常只有 [currentThroughput] 可用。
   void adjust({
     required double currentThroughput,
-    required int diskWriteLatencyMs,
-    required int engineMemoryMB,
-    required double uiFps,
+    int diskWriteLatencyMs = -1,
+    int engineMemoryMB = -1,
+    double uiFps = -1,
   }) {
     final now = DateTime.now().millisecondsSinceEpoch;
 
@@ -191,37 +194,37 @@ class DynamicConcurrency {
 
     bool changed = false;
 
-    // 严重卡顿：<15fps 持续 3 秒 → 强制退回默认
-    if (uiFps < 15) {
+    // 严重卡顿：<15fps → 强制退回默认（仅 UI 端可用）
+    if (uiFps >= 0 && uiFps < 15) {
       if (_currentConcurrency > initialConcurrency) {
         _currentConcurrency = initialConcurrency;
         changed = true;
       }
-      onConcurrencyChanged(_currentConcurrency);
+      if (changed) onConcurrencyChanged(_currentConcurrency);
       return;
     }
 
     // UI 帧率 < 30fps → 降低并发
-    if (uiFps < 30 && _currentConcurrency > minConcurrency) {
+    if (uiFps >= 0 && uiFps < 30 && _currentConcurrency > minConcurrency) {
       _currentConcurrency--;
       changed = true;
     }
 
     // 磁盘写入延迟过高 (>100ms) → 降低并发
-    if (diskWriteLatencyMs > 100 && _currentConcurrency > minConcurrency) {
+    if (diskWriteLatencyMs >= 0 && diskWriteLatencyMs > 100 && _currentConcurrency > minConcurrency) {
       _currentConcurrency--;
       changed = true;
     }
 
     // 引擎内存 > 80MB → 暂停新文件
-    if (engineMemoryMB > 80) {
+    if (engineMemoryMB >= 0 && engineMemoryMB > 80) {
       if (_currentConcurrency > 0) {
         _currentConcurrency = max(0, _currentConcurrency - 2);
         changed = true;
       }
     }
 
-    // 吞吐量下降 → 降低并发
+    // 吞吐量下降 > 20% → 降低并发
     if (_lastThroughput > 0 && currentThroughput < _lastThroughput * 0.8) {
       if (_currentConcurrency > minConcurrency) {
         _currentConcurrency--;
@@ -231,10 +234,11 @@ class DynamicConcurrency {
 
     // 吞吐量良好 → 尝试增加并发
     if (!changed &&
+        _lastThroughput > 0 &&
         currentThroughput >= _lastThroughput * 0.95 &&
         _currentConcurrency < maxConcurrency &&
-        engineMemoryMB < 50 &&
-        diskWriteLatencyMs < 50) {
+        (engineMemoryMB < 0 || engineMemoryMB < 50) &&
+        (diskWriteLatencyMs < 0 || diskWriteLatencyMs < 50)) {
       _currentConcurrency++;
       changed = true;
     }
