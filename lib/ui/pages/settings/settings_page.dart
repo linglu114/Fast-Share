@@ -120,6 +120,15 @@ class SettingsPage extends ConsumerWidget {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => _editPort(context, ref, serverPort),
           ),
+          const Divider(),
+          _SectionHeader(title: '关于'),
+          ListTile(
+            leading: const Icon(Icons.info_outline),
+            title: const Text('关于瞬息'),
+            subtitle: const Text('版本 1.0.0'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => _showAboutDialog(context),
+          ),
           const SizedBox(height: 32),
         ],
       ),
@@ -491,6 +500,50 @@ class _DownloadPathDialogState extends State<_DownloadPathDialog> {
       ],
     );
   }
+}
+
+void _showAboutDialog(BuildContext context) {
+  showDialog(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Row(
+        children: [
+          Icon(Icons.swap_horiz, size: 24),
+          SizedBox(width: 8),
+          Text('关于瞬息'),
+        ],
+      ),
+      content: const Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '瞬息 (FastShare)',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+          ),
+          SizedBox(height: 4),
+          Text('版本 1.0.0'),
+          SizedBox(height: 12),
+          Text(
+            '基于 FLP 协议 (v1.2) 的局域网文件传输工具。\n'
+            '支持 Android ↔ Windows 高速互传。',
+            style: TextStyle(fontSize: 13),
+          ),
+          SizedBox(height: 12),
+          SelectableText(
+            'https://github.com/linglu114/Fast-Share',
+            style: TextStyle(fontSize: 12, color: Colors.blue),
+          ),
+        ],
+      ),
+      actions: [
+        FilledButton(
+          onPressed: () => Navigator.pop(ctx),
+          child: const Text('关闭'),
+        ),
+      ],
+    ),
+  );
 }
 
 class _SectionHeader extends StatelessWidget {
