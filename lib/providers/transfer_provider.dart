@@ -31,7 +31,6 @@ class TransferNotifier extends Notifier<void> {
   // ignore: unused_field
   StreamSubscription<dynamic>? _engineSub;
   final _uuid = const Uuid();
-  final Map<String, List<int>> _openFds = {}; // transferId → [fd, ...]
 
   @override
   void build() {}
@@ -310,9 +309,6 @@ class TransferNotifier extends Notifier<void> {
       ForegroundServiceManager().stop();
     }
 
-    // 关闭 fd
-    _closeFds(transferId);
-
     // 销毁 Engine Isolate
     _engineIsolate?.then((i) => i.kill());
     _engineIsolate = null;
@@ -325,8 +321,6 @@ class TransferNotifier extends Notifier<void> {
     final message = data['message'] as String? ?? 'Unknown error';
 
     if (transferId != null) {
-      _closeFds(transferId);
-
       ref.read(activeTransferProvider.notifier).update((task) {
         if (task?.transferId == transferId) {
           task!.status = TransferStatus.failed;
@@ -394,36 +388,6 @@ class TransferNotifier extends Notifier<void> {
   // 公共操作
   // ═══════════════════════════════════════════════════════════
 
-  /// Resolves content URIs to fds for direct engine reads via /proc/self/fd/$fd.
-  Future<List<Map<String, dynamic>>> _resolveContentUris(
-      String transferId, List<Map<String, dynamic>>? contentFiles) async {
-    if (contentFiles == null || contentFiles.isEmpty) return [];
-    final resolved = <Map<String, dynamic>>[];
-    final fds = <int>[];
-    for (final f in contentFiles) {
-      final uri = f['uri'] as String? ?? '';
-      if (uri.isNotEmpty) {
-        final fd = await ContentUriReader.openFd(uri);
-        if (fd != null) {
-          f['fd'] = fd;
-          fds.add(fd);
-        }
-      }
-      resolved.add(f);
-    }
-    _openFds[transferId] = fds;
-    return resolved;
-  }
-
-  Future<void> _closeFds(String transferId) async {
-    final fds = _openFds.remove(transferId);
-    if (fds != null) {
-      for (final fd in fds) {
-        await ContentUriReader.closeFd(fd);
-      }
-    }
-  }
-
   Future<void> startTransfer({
     required List<String> paths,
     List<Map<String, dynamic>>? contentFiles,
@@ -435,9 +399,6 @@ class TransferNotifier extends Notifier<void> {
 
     final transferId = _uuid.v4();
     final settings = ref.read(settingsRepositoryProvider);
-
-    // 将 content URI 解析为文件描述符，引擎 Isolate 可直接读 /proc/self/fd/$fd
-    final resolvedContentFiles = await _resolveContentUris(transferId, contentFiles);
 
     // 创建任务
     final batchName = folderMode
@@ -475,7 +436,7 @@ class TransferNotifier extends Notifier<void> {
       'payload': {
         'transferId': transferId,
         'paths': paths,
-        'contentFiles': resolvedContentFiles,
+        'contentFiles': contentFiles,
         'targetIp': targetDevice.ip,
         'targetPort': targetDevice.port,
         'folderMode': folderMode,
@@ -519,8 +480,6 @@ class TransferNotifier extends Notifier<void> {
   }
 
   void cancelTransfer(String transferId) {
-    _closeFds(transferId);
-
     _engineSendPort?.send({
       'type': EngineCommandType.cancel,
       'payload': {'transferId': transferId},

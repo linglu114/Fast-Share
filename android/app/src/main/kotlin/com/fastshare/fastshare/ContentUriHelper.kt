@@ -2,23 +2,11 @@ package com.fastshare.fastshare
 
 import android.content.Context
 import android.content.Intent
-import android.database.Cursor
 import android.net.Uri
-import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
-import java.io.FileDescriptor
+import java.io.File
 
 object ContentUriHelper {
-
-    private val openFds = mutableMapOf<Int, ParcelFileDescriptor>()
-
-    /// Reflect FileDescriptor.fd (private int field) to get the raw fd number.
-    /// This works on all API levels and keeps ParcelFileDescriptor alive for cleanup.
-    private fun getFdNumber(fdObj: FileDescriptor): Int {
-        val field = FileDescriptor::class.java.getDeclaredField("fd")
-        field.isAccessible = true
-        return field.getInt(fdObj)
-    }
 
     fun parsePickResult(context: Context, data: Intent): List<Map<String, Any?>> {
         val files = mutableListOf<Map<String, Any?>>()
@@ -64,11 +52,33 @@ object ContentUriHelper {
             }
         } catch (_: Exception) {}
 
+        val realPath = tryResolveRealPath(context, uri)
+
         return mapOf(
             "uri" to uri.toString(),
             "name" to name,
-            "size" to size
+            "size" to size,
+            "realPath" to realPath,
         )
+    }
+
+    /// Best-effort: resolve a content:// URI to a real filesystem path.
+    /// Returns null on modern Android (scoped storage) but many OEMs still
+    /// expose the _data column. When available, the engine reads the file
+    /// directly without any content-URI overhead.
+    private fun tryResolveRealPath(context: Context, uri: Uri): String? {
+        try {
+            context.contentResolver.query(uri, arrayOf("_data"), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val idx = cursor.getColumnIndex("_data")
+                    if (idx >= 0) {
+                        val path = cursor.getString(idx)
+                        if (path != null && File(path).canRead()) return path
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+        return null
     }
 
     fun readChunk(context: Context, uriStr: String, offset: Int, length: Int): ByteArray? {
@@ -93,29 +103,5 @@ object ContentUriHelper {
         } catch (_: Exception) {
             null
         }
-    }
-
-    /// Open a content URI and return its raw file descriptor number.
-    /// Call [closeFd] to release the ParcelFileDescriptor and close the fd.
-    fun openFd(context: Context, uriStr: String): Int {
-        val uri = Uri.parse(uriStr)
-        val pfd = context.contentResolver.openFileDescriptor(uri, "r")
-            ?: throw IllegalArgumentException("Cannot open file descriptor for $uriStr")
-        val fd = getFdNumber(pfd.fileDescriptor)
-        openFds[fd] = pfd
-        return fd
-    }
-
-    /// Close a file descriptor previously opened with [openFd].
-    fun closeFd(fd: Int) {
-        openFds.remove(fd)?.close()
-    }
-
-    /// Close all open file descriptors.
-    fun closeAllFds() {
-        for (pfd in openFds.values) {
-            try { pfd.close() } catch (_: Exception) {}
-        }
-        openFds.clear()
     }
 }
