@@ -306,6 +306,9 @@ class _ActiveTransferCard extends StatelessWidget {
                 ),
               ],
             ),
+            // 文件统计
+            Text('${task.fileCount} 个文件 · ${formatSize(task.totalSize)}',
+                style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant)),
             const SizedBox(height: 4),
             Row(
               children: [
@@ -314,12 +317,12 @@ class _ActiveTransferCard extends StatelessWidget {
                 if (task.avgSpeed > 0)
                   Text(
                     formatEta(task.totalSize, task.bytesTransferred, task.avgSpeed),
-                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                    style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant),
                   ),
                 const Spacer(),
                 Text(
-                  '${task.files.where((f) => f.status == TransferStatus.completed).length}/${task.fileCount} 文件',
-                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                  '${task.files.where((f) => f.status == TransferStatus.completed).length}/${task.fileCount} 完成',
+                  style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant),
                 ),
               ],
             ),
@@ -437,8 +440,36 @@ class _ReceiveTransferCard extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text('来自: ${task.peerDeviceName ?? task.senderDeviceId}',
-                style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
-            const SizedBox(height: 12),
+                style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+            const SizedBox(height: 2),
+            Text('${task.fileCount} 个文件 · ${formatSize(task.totalSize)}',
+                style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+            const SizedBox(height: 8),
+            // 文件列表
+            if (task.files.isNotEmpty)
+              ...task.files.take(8).map((f) => Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 1),
+                    child: Row(
+                      children: [
+                        Icon(Icons.insert_drive_file, size: 14,
+                            color: Theme.of(context).colorScheme.onSurfaceVariant),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(f.relativePath,
+                              style: const TextStyle(fontSize: 12),
+                              overflow: TextOverflow.ellipsis),
+                        ),
+                        Text(formatSize(f.size),
+                            style: TextStyle(fontSize: 11,
+                                color: Theme.of(context).colorScheme.onSurfaceVariant)),
+                      ],
+                    ),
+                  )),
+            if (task.files.length > 8)
+              Text('... 还有 ${task.files.length - 8} 个文件',
+                  style: TextStyle(fontSize: 11,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant)),
+            if (task.files.isNotEmpty) const SizedBox(height: 8),
             LinearProgressIndicator(
               value: task.progress,
               minHeight: 6,
@@ -466,12 +497,12 @@ class _ReceiveTransferCard extends StatelessWidget {
                 if (task.avgSpeed > 0)
                   Text(
                     formatEta(task.totalSize, task.bytesTransferred, task.avgSpeed),
-                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                    style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant),
                   ),
                 const Spacer(),
                 Text(
-                  '${task.files.where((f) => f.status == TransferStatus.completed).length}/${task.fileCount} 文件',
-                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                  '${task.files.where((f) => f.status == TransferStatus.completed).length}/${task.fileCount} 完成',
+                  style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant),
                 ),
               ],
             ),

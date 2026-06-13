@@ -40,7 +40,7 @@ class ReceiveConfirmDialog extends StatelessWidget {
                   style: const TextStyle(fontWeight: FontWeight.w600),
                 ),
                 const Spacer(),
-                _buildPlatformBadge(sender.platform),
+                _buildPlatformBadge(context, sender.platform),
               ],
             ),
             const Divider(height: 24),
@@ -52,7 +52,7 @@ class ReceiveConfirmDialog extends StatelessWidget {
             if (folderMode) ...[
               const SizedBox(height: 4),
               Text('包含文件夹结构',
-                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                  style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant)),
             ],
             const SizedBox(height: 8),
             // 文件列表 (最多显示 10 个)
@@ -63,7 +63,7 @@ class ReceiveConfirmDialog extends StatelessWidget {
                       Icon(
                         Icons.insert_drive_file,
                         size: 16,
-                        color: Colors.grey.shade500,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
                       ),
                       const SizedBox(width: 8),
                       Expanded(
@@ -76,7 +76,7 @@ class ReceiveConfirmDialog extends StatelessWidget {
                       Text(
                         formatSize(f['size'] as int? ?? 0),
                         style: TextStyle(
-                            fontSize: 12, color: Colors.grey.shade600),
+                            fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant),
                       ),
                     ],
                   ),
@@ -84,7 +84,7 @@ class ReceiveConfirmDialog extends StatelessWidget {
             if (files.length > 10)
               Text(
                 '... 还有 ${files.length - 10} 个文件',
-                style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
+                style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant),
               ),
           ],
         ),
@@ -102,12 +102,21 @@ class ReceiveConfirmDialog extends StatelessWidget {
     );
   }
 
-  Widget _buildPlatformBadge(String platform) {
-    final icon = platform == 'android' ? Icons.android : Icons.laptop;
+  Widget _buildPlatformBadge(BuildContext context, String platform) {
+    final (icon, label) = switch (platform) {
+      'android' => (Icons.android, 'Android'),
+      'ios' => (Icons.phone_iphone, 'iOS'),
+      'macos' => (Icons.laptop_mac, 'macOS'),
+      'linux' => (Icons.terminal, 'Linux'),
+      'windows' => (Icons.laptop_windows, 'Windows'),
+      _ => (null, null), // unknown — don't show a badge
+    };
+    if (icon == null) return const SizedBox.shrink();
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: BoxDecoration(
-        color: Colors.grey.shade100,
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(8),
       ),
       child: Row(
@@ -115,7 +124,7 @@ class ReceiveConfirmDialog extends StatelessWidget {
         children: [
           Icon(icon, size: 14),
           const SizedBox(width: 4),
-          Text(platform == 'android' ? 'Android' : 'Windows',
+          Text(label!,
               style: const TextStyle(fontSize: 11)),
         ],
       ),
