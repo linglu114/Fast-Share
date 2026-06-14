@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path_provider/path_provider.dart';
 import '../models/device.dart';
 import '../models/transfer_task.dart';
 import '../models/history_record.dart';
@@ -206,12 +207,13 @@ class ConnectionNotifier extends Notifier<Map<String, bool>> {
     ref.read(pendingOfferProvider.notifier).state = offer;
   }
 
-  void acceptPendingOffer() {
+  Future<void> acceptPendingOffer() async {
     final offer = ref.read(pendingOfferProvider);
     if (offer == null) return;
     Logger.log('[CN] acceptPendingOffer: transferId=${offer.transferId}');
     final savePath = ref.read(downloadPathProvider);
 
+    final tempDir = (await getTemporaryDirectory()).path;
     _manager?.acceptTransfer(
       offer.senderDeviceId,
       offer.transferId,
@@ -220,6 +222,8 @@ class ConnectionNotifier extends Notifier<Map<String, bool>> {
       batchName: offer.batchName,
       totalSize: offer.totalSize,
       fileCount: offer.fileCount,
+      files: offer.files,
+      logDir: tempDir,
     );
 
     final task = TransferTask(

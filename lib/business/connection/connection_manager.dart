@@ -380,7 +380,8 @@ class ConnectionManager {
 
   /// 接受传输，发送 TRANSFER_ACCEPT 并启动 ReceiveEngine Isolate
   Future<void> acceptTransfer(String deviceId, String transferId, String savePath,
-      {String? senderDeviceName, String? batchName, int totalSize = 0, int fileCount = 0}) async {
+      {String? senderDeviceName, String? batchName, int totalSize = 0, int fileCount = 0,
+       List<Map<String, dynamic>>? files, String? logDir}) async {
     Logger.log('[CM] acceptTransfer: START deviceId=$deviceId transferId=$transferId savePath=$savePath');
 
     // 防止重复 TRANSFER_OFFER 导致创建多个引擎
@@ -403,6 +404,8 @@ class ConnectionManager {
       'batchName': batchName,
       'totalSize': totalSize,
       'fileCount': fileCount,
+      'files': files ?? const [],
+      'logDir': logDir,
     };
 
     _receiveEventController.add({
@@ -472,10 +475,11 @@ class ConnectionManager {
         enginePort = data['enginePort'] as SendPort;
         _receiveEngines[transferId] = enginePort!;
 
-        // Send start command with fallback path and expected file count
+        // Send start command with fallback path, expected file count, and logDir
         final meta = _receiveMeta[transferId];
         final fileCount = meta?['fileCount'] as int? ?? 0;
         final files = meta?['files'] as List?;
+        final logDir = meta?['logDir'] as String?;
         enginePort!.send({
           'type': 'start',
           'payload': {
@@ -484,6 +488,7 @@ class ConnectionManager {
             if (fallbackPath != null) 'fallbackPath': fallbackPath,
             'expectedFileCount': fileCount,
             if (files != null) 'files': files,
+            if (logDir != null) 'logDir': logDir,
           },
         });
 

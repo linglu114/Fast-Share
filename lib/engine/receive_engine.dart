@@ -119,6 +119,13 @@ class ReceiveEngine {
     _lastFileIdStr = null;
     _lastFile = null;
     _lastFileIdBytes = null;
+
+    // Re-init Logger in this Isolate
+    final logDir = payload['logDir'] as String?;
+    if (logDir != null) {
+      try { Logger.init(dirPath: logDir, suffix: '-RecvEngine'); } catch (_) {}
+    }
+
     Logger.log('[RECV] _start: transferId=$_transferId saveRoot=$_saveRoot fallbackRoot=$_fallbackRoot expectedFiles=$_expectedFileCount');
 
     // Pre-create directory structure from inline file list (或 _pendingFiles 兼容)
