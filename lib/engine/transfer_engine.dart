@@ -576,6 +576,7 @@ class TransferSession {
   Future<void> _executeTransfer() async {
     _stopHeartbeat(); // 传输期间数据流即为心跳，避免 PING 和 FILE_DATA 竞争 socket
     _allFilesDone = Completer<void>(); // 必须在传文件之前创建，否则 TRANSFER_COMPLETE 可能丢失
+    Logger.flushSync(); // 落盘扫描和连接阶段日志，防止传输阶段崩溃丢失
 
     // 自动模式：初始化动态并发调整器
     if (concurrentCount == 0) {
@@ -697,7 +698,8 @@ class TransferSession {
         final tRead1 = DateTime.now().microsecondsSinceEpoch;
         readUs += tRead1 - tRead0;
 
-        // 零拷贝：64B 帧头 + 数据 + 4B checksum(0) 直接写 socket
+        // 单次 socket.add() 发送完整 DATA 帧 (header + data + 4B zeroChecksum)，
+        // 避免三次独立 add() + flush() 在 Android 原生层触发 StreamSink 内部状态冲突
         final tSend0 = DateTime.now().microsecondsSinceEpoch;
         final header = FlpFrame.buildFileDataHeader(
           transferId: transferId,
@@ -706,9 +708,14 @@ class TransferSession {
           offset: offset,
           dataLength: currentChunkSize,
         );
-        _sendRawBytes(header);
-        _sendRawBytes(data);
-        _sendRawBytes(FlpFrame.zeroChecksum);
+        {
+          final zc = FlpFrame.zeroChecksum;
+          final frame = Uint8List(header.length + data.length + zc.length);
+          frame.setAll(0, header);
+          frame.setAll(header.length, data);
+          frame.setAll(header.length + data.length, zc);
+          _sendRawBytes(frame);
+        }
 
         // 写入过程中 socket 可能已由错误回调关闭，此时立即终止避免
         // 继续累计 _bytesTransferred 并进入无限重试循环
@@ -723,10 +730,6 @@ class TransferSession {
 
         _updateSpeed();
         _notifyProgress();
-
-        if (i % 4 == 3 || i == totalChunks - 1) {
-          await _socket?.flush();
-        }
 
         // 在两个 chunk 之间的安全边界发送 TRANSFER_PAUSE，
         // 此时 header+data+checksum 完整写入，不会与控制帧交织
@@ -1235,6 +1238,7 @@ class TransferSession {
       _socket?.add(bytes);
     } catch (e) {
       Logger.log('[ENG] _sendRawBytes FAILED: len=${bytes.length} error=$e');
+      Logger.flushSync(); // 立即落盘，防止后续 cancel() 丢失日志
       _sendEvent('error', {
         'transferId': transferId,
         'message': 'Socket write failed: $e',
