@@ -6,7 +6,10 @@ import android.content.IntentFilter
 import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import android.os.Build
+import android.os.Bundle
+import android.os.Parcelable
 import android.os.PowerManager
+import android.net.Uri
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -15,9 +18,29 @@ class MainActivity : FlutterActivity() {
     private var multicastLock: WifiManager.MulticastLock? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var pickFilesResult: MethodChannel.Result? = null
+    private var pendingShareResult: MethodChannel.Result? = null
+    private var pendingShareData: List<Map<String, Any?>>? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+
+        // ── Share receiver channel ──
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "fastshare/share").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "getPendingShare" -> {
+                    val data = pendingShareData
+                    pendingShareData = null
+                    if (data != null) {
+                        result.success(data)
+                    } else {
+                        result.success(emptyList<Map<String, Any?>>())
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        // ... existing channels follow
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "fastshare/wifi_lock").setMethodCallHandler { call, result ->
             when (call.method) {
@@ -185,6 +208,66 @@ class MainActivity : FlutterActivity() {
         } catch (_: Exception) {}
         try {
             wakeLock?.release()
+        } catch (_: Exception) {}
+    }
+
+    // ── Share intent handling ──
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        // Process share intent that launched the activity (cold start)
+        intent?.let { processShareIntent(it) }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        processShareIntent(intent)
+    }
+
+    private fun processShareIntent(intent: Intent) {
+        if (intent.action != Intent.ACTION_SEND && intent.action != Intent.ACTION_SEND_MULTIPLE) return
+
+        val files = mutableListOf<Map<String, Any?>>()
+
+        // Text sharing
+        val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
+        if (sharedText != null) {
+            files.add(mapOf(
+                "uri" to "data:text/plain,${java.net.URLEncoder.encode(sharedText, "UTF-8")}",
+                "name" to "shared_text.txt",
+                "size" to sharedText.toByteArray().size.toLong(),
+                "realPath" to null,
+            ))
+        }
+
+        // Single file
+        fun collectUri(uri: Uri?) {
+            if (uri == null) return
+            try {
+                contentResolver.takePersistableUriPermission(
+                    uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (_: Exception) {}
+            files.add(ContentUriHelper.buildShareFileInfo(contentResolver, uri))
+        }
+
+        // SEND: single URI
+        (intent.getParcelableExtra<Parcelable>(Intent.EXTRA_STREAM) as? Uri)?.let { collectUri(it) }
+
+        // SEND_MULTIPLE: list of URIs
+        intent.getParcelableArrayListExtra<Parcelable>(Intent.EXTRA_STREAM)?.forEach { parcel ->
+            (parcel as? Uri)?.let { collectUri(it) }
+        }
+
+        if (files.isEmpty()) return
+
+        pendingShareData = files
+        // If Flutter engine is already attached, notify immediately
+        try {
+            flutterEngine?.dartExecutor?.binaryMessenger?.let { messenger ->
+                MethodChannel(messenger, "fastshare/share").invokeMethod("onShareReceived", files)
+            }
         } catch (_: Exception) {}
     }
 

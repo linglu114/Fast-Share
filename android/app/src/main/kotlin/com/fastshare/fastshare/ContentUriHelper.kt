@@ -71,6 +71,29 @@ object ContentUriHelper {
         )
     }
 
+    /// Public variant for share-intent processing — takes ContentResolver directly
+    /// since the caller (MainActivity) already has `contentResolver` in scope.
+    fun buildShareFileInfo(resolver: android.content.ContentResolver, uri: Uri): Map<String, Any?> {
+        var name = "unknown"
+        var size = 0L
+        try {
+            resolver.query(uri, null, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val nameIdx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    val sizeIdx = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    if (nameIdx >= 0) name = cursor.getString(nameIdx) ?: name
+                    if (sizeIdx >= 0) size = cursor.getLong(sizeIdx)
+                }
+            }
+        } catch (_: Exception) {}
+        return mapOf(
+            "uri" to uri.toString(),
+            "name" to name,
+            "size" to size,
+            "realPath" to null,
+        )
+    }
+
     private fun tryResolveRealPath(context: Context, uri: Uri): String? {
         try {
             context.contentResolver.query(uri, arrayOf("_data"), null, null, null)?.use { cursor ->

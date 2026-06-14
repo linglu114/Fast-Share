@@ -10,10 +10,14 @@ import 'storage/database.dart';
 import 'storage/settings_repository.dart';
 import 'providers/settings_provider.dart';
 import 'providers/platform_provider.dart';
+import 'providers/transfer_provider.dart';
 import 'platform/platform_android.dart';
 import 'platform/platform_windows.dart';
 import 'util/logger.dart';
 import 'app.dart';
+
+/// 来自系统分享的待处理文件 — 非 null 时 UI 应弹出设备选择器
+final pendingShareFilesProvider = StateProvider<List<Map<String, dynamic>>?>((ref) => null);
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -57,6 +61,10 @@ void main() async {
 
   // 初始化数据库
   await AppDatabase.database;
+
+  // Android 系统分享通道 — 在 runApp 前注册 MethodChannel
+  final shareChannel = MethodChannel('fastshare/share');
+  // 这里只是确保通道存在，实际监听在 app.dart 中设置
 
   runApp(
     ProviderScope(

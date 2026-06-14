@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'models/device.dart';
 import 'ui/pages/devices/devices_page.dart';
@@ -17,6 +18,7 @@ import 'providers/transfer_provider.dart';
 import 'providers/navigation_provider.dart';
 import 'providers/clipboard_provider.dart';
 import 'providers/battery_thermal_provider.dart';
+import 'main.dart'; // for pendingShareFilesProvider
 
 /// 应用入口 — 深色模式完善 (需求 §32)
 ///
@@ -45,6 +47,37 @@ class _FastShareAppState extends ConsumerState<FastShareApp>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+
+    // ── 系统分享入口 ──
+    if (const bool.fromEnvironment('dart.vm.product') || true) {
+      // Always register: product mode for real use, debug for testing
+      final shareChannel = const MethodChannel('fastshare/share');
+      shareChannel.setMethodCallHandler((call) async {
+        if (call.method == 'onShareReceived') {
+          final files = (call.arguments as List?)
+              ?.map((e) => Map<String, dynamic>.from(e as Map))
+              .toList();
+          if (files != null && files.isNotEmpty && mounted) {
+            ref.read(pendingShareFilesProvider.notifier).state = files;
+            _handleSharedFiles(files);
+          }
+        }
+      });
+
+      // Cold start: poll for pending share data from launch intent
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        try {
+          final result = await shareChannel.invokeMethod('getPendingShare');
+          if (result is List && result.isNotEmpty && mounted) {
+            final files = result
+                .map((e) => Map<String, dynamic>.from(e as Map))
+                .toList();
+            ref.read(pendingShareFilesProvider.notifier).state = files;
+            _handleSharedFiles(files);
+          }
+        } catch (_) {}
+      });
+    }
   }
 
   @override
@@ -93,6 +126,88 @@ class _FastShareAppState extends ConsumerState<FastShareApp>
       if (mounted) {
         ref.read(onlineDevicesProvider.notifier).refreshNow();
       }
+    });
+  }
+
+  /// 系统分享入口 — 收到文件后弹出设备选择器并开始传输
+  void _handleSharedFiles(List<Map<String, dynamic>> files) {
+    // 切换到传输页
+    ref.read(currentTabProvider.notifier).state = 1;
+
+    // 等一帧让 UI 稳定后弹出设备选择器
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+
+      final onlineDevices = ref.read(onlineDevicesProvider);
+      if (onlineDevices.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('暂无在线设备，请确保设备在同一网络')),
+          );
+        }
+        return;
+      }
+
+      final navigator = _navigatorKey.currentState;
+      if (navigator == null) return;
+
+      final device = await showModalBottomSheet<Device>(
+        context: navigator.context,
+        builder: (ctx) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Padding(
+                padding: EdgeInsets.all(16),
+                child: Text('选择目标设备',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+              ),
+              const Divider(height: 1),
+              ...onlineDevices.map((d) => ListTile(
+                    leading: CircleAvatar(
+                      backgroundColor: d.platform == 'android'
+                          ? Colors.green.shade100
+                          : Colors.blue.shade100,
+                      child: Icon(
+                        d.platform == 'android'
+                            ? Icons.android
+                            : Icons.laptop,
+                        size: 22,
+                      ),
+                    ),
+                    title: Text(d.name),
+                    subtitle: Text(d.ip),
+                    onTap: () => Navigator.pop(ctx, d),
+                  )),
+              const SizedBox(height: 16),
+            ],
+          ),
+        ),
+      );
+
+      if (device == null || !mounted) return;
+
+      // 确保连接
+      final isConnected = ref.read(connectionStateProvider)[device.deviceId] == true;
+      if (!isConnected) {
+        try {
+          await ref.read(connectionStateProvider.notifier).connect(device);
+        } catch (_) {}
+      }
+
+      if (!mounted) return;
+
+      // 开始传输
+      await ref.read(transferNotifierProvider.notifier).startTransfer(
+        paths: [],
+        contentFiles: files,
+        targetDevice: device,
+        folderMode: false,
+        ref: ref,
+      );
+
+      // 清除 pending 状态
+      ref.read(pendingShareFilesProvider.notifier).state = null;
     });
   }
 
