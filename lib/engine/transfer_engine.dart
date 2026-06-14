@@ -1425,18 +1425,19 @@ enum TransferStrategy { sequential, concurrent, mixed }
 
 /// 令牌桶限速器 (需求 §16)
 ///
-/// 使用 FIFO 等待队列 + 精确令牌分配，每次补充后只唤醒能
-/// 被当前令牌数满足的等待者，防止 _tokens 被扣至负值。
+/// 使用 burst 容量 + 简单自旋等待。burst 至少能容纳一个完整 chunk
+/// (8 MB)，防止 chunkSize > rate 时死锁。空闲时令牌累积到 burst 上限，
+/// 活跃时维持在 _maxRate 附近。
 class TokenBucket {
   final int _maxRate; // bytes/s
+  late final int _burstSize;
   int _tokens;
   int _lastRefill;
   Timer? _timer;
-  final _waiters = <int, _TokenWaiter>{};
-  int _waiterId = 0;
 
   TokenBucket(this._maxRate)
-      : _tokens = _maxRate,
+      : _tokens = (_maxRate > (8 * 1024 * 1024) ? _maxRate : (8 * 1024 * 1024)),
+        _burstSize = (_maxRate > (8 * 1024 * 1024) ? _maxRate : (8 * 1024 * 1024)),
         _lastRefill = DateTime.now().millisecondsSinceEpoch {
     _timer = Timer.periodic(const Duration(milliseconds: 100), (_) => _refill());
   }
@@ -1445,57 +1446,19 @@ class TokenBucket {
     final now = DateTime.now().millisecondsSinceEpoch;
     final elapsed = now - _lastRefill;
     _lastRefill = now;
-    _tokens = min(_maxRate, _tokens + (_maxRate * elapsed / 1000).round());
-    _processWaiters();
+    final added = (_maxRate * elapsed / 1000).round();
+    _tokens = _tokens + added > _burstSize ? _burstSize : _tokens + added;
   }
 
   Future<void> consume(int bytes) async {
-    if (bytes <= _tokens && _waiters.isEmpty) {
-      _tokens -= bytes;
-      return;
+    while (_tokens < bytes) {
+      await Future.delayed(const Duration(milliseconds: 100));
     }
-
-    final id = _waiterId++;
-    final completer = Completer<void>();
-    _waiters[id] = _TokenWaiter(completer, bytes);
-    // Re-check: tokens may have been refilled since we entered
-    _processWaiters();
-    await completer.future;
-    // 防御：被唤醒时再次确认令牌足够
-    if (bytes <= _tokens) {
-      _tokens -= bytes;
-    }
-  }
-
-  void _processWaiters() {
-    if (_waiters.isEmpty) return;
-    // FIFO: wake waiters in order until tokens run out
-    final ids = _waiters.keys.toList(); // insertion-ordered map
-    for (final id in ids) {
-      final w = _waiters[id];
-      if (w == null || w.completer.isCompleted) {
-        _waiters.remove(id);
-        continue;
-      }
-      if (w.bytes <= _tokens) {
-        _tokens -= w.bytes;
-        w.completer.complete();
-        _waiters.remove(id);
-      }
-    }
+    _tokens -= bytes;
   }
 
   void stop() {
     _timer?.cancel();
-    for (final w in _waiters.values) {
-      if (!w.completer.isCompleted) w.completer.complete();
-    }
-    _waiters.clear();
+    _timer = null;
   }
-}
-
-class _TokenWaiter {
-  final Completer<void> completer;
-  final int bytes;
-  const _TokenWaiter(this.completer, this.bytes);
 }
