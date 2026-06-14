@@ -22,6 +22,22 @@ class ContentUriReader {
     return [];
   }
 
+  /// 打开系统文件夹选择器 (ACTION_OPEN_DOCUMENT_TREE)，递归遍历所有文件，
+  /// 返回 content-file 格式的列表。每项含 uri, name (树内相对路径), size, realPath。
+  /// 取消或出错返回空列表。
+  static Future<List<Map<String, dynamic>>> pickFolder() async {
+    if (!isSupported) return [];
+    try {
+      final result = await _channel.invokeMethod('pickFolder');
+      if (result is List) {
+        return result.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      }
+    } on MissingPluginException {
+      // plugin not registered on this platform
+    } catch (_) {}
+    return [];
+  }
+
   /// 打开 content URI 获取文件描述符编号，用于 Engine Isolate 直读。
   /// 返回 -1 表示失败（此时回退到 readChunk 路径）。
   static Future<int> openContentFd(String uri) async {

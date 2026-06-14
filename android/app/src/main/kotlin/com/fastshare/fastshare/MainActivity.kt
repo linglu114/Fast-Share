@@ -18,6 +18,7 @@ class MainActivity : FlutterActivity() {
     private var multicastLock: WifiManager.MulticastLock? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var pickFilesResult: MethodChannel.Result? = null
+    private var pickFolderResult: MethodChannel.Result? = null
     private var pendingShareResult: MethodChannel.Result? = null
     private var pendingShareData: List<Map<String, Any?>>? = null
 
@@ -134,6 +135,14 @@ class MainActivity : FlutterActivity() {
                     }
                     startActivityForResult(intent, PICK_FILES_REQUEST)
                 }
+                "pickFolder" -> {
+                    pickFolderResult = result
+                    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                                 Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
+                    }
+                    startActivityForResult(intent, PICK_FOLDER_REQUEST)
+                }
                 "openContentFd" -> {
                     val uri = call.argument<String>("uri") ?: ""
                     val fd = ContentUriHelper.openContentFd(applicationContext, uri)
@@ -171,10 +180,20 @@ class MainActivity : FlutterActivity() {
                 result.success(emptyList<Map<String, Any?>>())
             }
         }
+        if (requestCode == PICK_FOLDER_REQUEST) {
+            val result = pickFolderResult ?: return
+            pickFolderResult = null
+            if (resultCode == Activity.RESULT_OK) {
+                result.success(ContentUriHelper.parseFolderPickResult(applicationContext, data))
+            } else {
+                result.success(emptyList<Map<String, Any?>>())
+            }
+        }
     }
 
     companion object {
         private const val PICK_FILES_REQUEST = 1001
+        private const val PICK_FOLDER_REQUEST = 1002
     }
 
     private fun acquireMulticastLock() {

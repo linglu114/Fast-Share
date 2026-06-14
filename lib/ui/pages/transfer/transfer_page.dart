@@ -132,9 +132,18 @@ class TransferPage extends ConsumerWidget {
   }
 
   Future<void> _pickFolderAndSend(BuildContext context, WidgetRef ref) async {
-    final path = await FilePicker.getDirectoryPath();
-    if (path == null) return;
-    await _selectDeviceAndSend(context, ref, [path], true);
+    if (ContentUriReader.isSupported) {
+      // Android: SAF tree picker avoids filesystem permission issues
+      final contentFiles = await ContentUriReader.pickFolder();
+      if (contentFiles.isEmpty) return;
+      await _selectDeviceAndSend(context, ref, [], true,
+          contentFiles: contentFiles);
+    } else {
+      // Desktop / iOS: FilePicker returns a real filesystem path
+      final path = await FilePicker.getDirectoryPath();
+      if (path == null) return;
+      await _selectDeviceAndSend(context, ref, [path], true);
+    }
   }
 
   void _onDragDone(

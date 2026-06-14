@@ -9,6 +9,7 @@ import java.io.File
 import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
+import androidx.documentfile.provider.DocumentFile
 
 object ContentUriHelper {
 
@@ -174,5 +175,72 @@ object ContentUriHelper {
         openChannels.clear()
         for ((_, pfd) in openPfds) { try { pfd.close() } catch (_: Exception) {} }
         openPfds.clear()
+    }
+
+    /// Opens ACTION_OPEN_DOCUMENT_TREE result, takes persistable permission,
+    /// and recursively collects every file under the tree as content-file maps.
+    /// Returns empty list when user cancels or an error occurs.
+    fun parseFolderPickResult(context: Context, data: Intent?): List<Map<String, Any?>> {
+        if (data == null) return emptyList()
+
+        val treeUri = data.data ?: return emptyList()
+
+        // Persist permission across reboots
+        try {
+            context.contentResolver.takePersistableUriPermission(
+                treeUri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        } catch (_: Exception) {}
+
+        val rootDoc = DocumentFile.fromTreeUri(context, treeUri) ?: run {
+            android.util.Log.w("ContentUriHelper", "fromTreeUri returned null for $treeUri")
+            return emptyList()
+        }
+
+        return traverseTree(context, rootDoc, "")
+    }
+
+    /// Recursively traverse [parent], collecting file entries into a flat list.
+    /// Each entry follows the same shape as pickFiles results:
+    ///   { uri, name (relative path within tree), size, realPath (null for SAF) }
+    private fun traverseTree(
+        context: Context,
+        parent: DocumentFile,
+        prefix: String
+    ): List<Map<String, Any?>> {
+        val result = mutableListOf<Map<String, Any?>>()
+        val children = try {
+            parent.listFiles()
+        } catch (e: Exception) {
+            android.util.Log.w("ContentUriHelper", "listFiles failed for ${parent.uri}: $e")
+            return result
+        }
+
+        if (children == null) return result
+
+        for (child in children) {
+            try {
+                if (child.isDirectory) {
+                    val subPrefix = if (prefix.isEmpty()) "${child.name}/" else "$prefix${child.name}/"
+                    result.addAll(traverseTree(context, child, subPrefix))
+                } else if (child.isFile) {
+                    var size = 0L
+                    try { size = child.length() } catch (_: Exception) {}
+
+                    result.add(mapOf(
+                        "uri" to child.uri.toString(),
+                        "name" to "$prefix${child.name}",
+                        "size" to size,
+                        "realPath" to null,
+                    ))
+                }
+                // skip other types (virtual containers, etc.)
+            } catch (e: Exception) {
+                android.util.Log.w("ContentUriHelper", "Skipping child in traverseTree: $e")
+            }
+        }
+
+        return result
     }
 }

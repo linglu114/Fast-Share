@@ -467,9 +467,18 @@ class _DevicesPageState extends ConsumerState<DevicesPage>
       if (paths.isEmpty) return;
       await _startTransferToDevice(ref, device, paths, false);
     } else if (choice == 'folder') {
-      final path = await FilePicker.getDirectoryPath();
-      if (path == null) return;
-      await _startTransferToDevice(ref, device, [path], true);
+      if (ContentUriReader.isSupported) {
+        // Android: SAF tree picker avoids filesystem permission issues
+        final contentFiles = await ContentUriReader.pickFolder();
+        if (contentFiles.isEmpty) return;
+        await _startTransferToDevice(ref, device, [], true,
+            contentFiles: contentFiles);
+      } else {
+        // Desktop / iOS: FilePicker returns a real filesystem path
+        final path = await FilePicker.getDirectoryPath();
+        if (path == null) return;
+        await _startTransferToDevice(ref, device, [path], true);
+      }
     }
   }
 

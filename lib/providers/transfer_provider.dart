@@ -442,33 +442,42 @@ class TransferNotifier extends Notifier<void> {
     List<Map<String, dynamic>>? finalContentFiles = contentFiles;
     bool finalFolderMode = folderMode;
 
+    // Android folder mode expansion:
+    // - If contentFiles already populated (SAF tree traversal), use them directly
+    // - Otherwise, try Directory.list() for real filesystem paths (older Android / desktop)
     if (folderMode && Platform.isAndroid && paths.length == 1) {
-      try {
-        final dir = Directory(paths.first);
-        if (await dir.exists()) {
-          final expanded = <Map<String, dynamic>>[];
-          final dirPath = dir.path;
-          await for (final entity in dir.list(recursive: true)) {
-            if (entity is File) {
-              final abs = entity.path;
-              var rel = abs.substring(dirPath.length).replaceAll('\\', '/');
-              if (rel.startsWith('/')) rel = rel.substring(1);
-              expanded.add({
-                'uri': '',
-                'name': rel,
-                'size': await entity.length(),
-                'realPath': abs,
-              });
+      if (finalContentFiles != null && finalContentFiles.isNotEmpty) {
+        // SAF tree traversal already produced a complete file list;
+        // clear paths so the Engine doesn't try to stat the path
+        finalPaths = [];
+      } else {
+        // Legacy: FilePicker.getDirectoryPath() on pre-scoped-storage Android
+        try {
+          final dir = Directory(paths.first);
+          if (await dir.exists()) {
+            final expanded = <Map<String, dynamic>>[];
+            final dirPath = dir.path;
+            await for (final entity in dir.list(recursive: true)) {
+              if (entity is File) {
+                final abs = entity.path;
+                var rel = abs.substring(dirPath.length).replaceAll('\\', '/');
+                if (rel.startsWith('/')) rel = rel.substring(1);
+                expanded.add({
+                  'uri': '',
+                  'name': rel,
+                  'size': await entity.length(),
+                  'realPath': abs,
+                });
+              }
+            }
+            if (expanded.isNotEmpty) {
+              finalContentFiles = expanded;
+              finalPaths = [];
             }
           }
-          if (expanded.isNotEmpty) {
-            finalContentFiles = expanded;
-            finalPaths = [];
-            // folderMode 保留 true，接收端根据 relativePath 创建子目录
-          }
+        } catch (e) {
+          Logger.log('[TF] pre-scan directory failed: $e');
         }
-      } catch (e) {
-        Logger.log('[TF] pre-scan directory failed: $e');
       }
     }
 
