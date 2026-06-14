@@ -702,14 +702,26 @@ class TransferSession {
         if (_tokenBucket != null) {
           await _tokenBucket!.consume(currentChunkSize);
         }
+        // 限速等待后可能已暂停，立即检查以避免继续发送
+        if (_paused && !_cancelled) continue;
 
-        // 读文件
+        // 读文件（定位读写，确保暂停后重读同一 offset）
         final tRead0 = DateTime.now().microsecondsSinceEpoch;
-        final data = useContentUri
-            ? await _requestChunk(file.fileId, file.contentUri!, i, offset, currentChunkSize)
-            : await raf!.read(currentChunkSize);
+        final Uint8List data;
+        if (useContentUri) {
+          data = await _requestChunk(file.fileId, file.contentUri!, i, offset,
+              currentChunkSize);
+        } else {
+          raf!.setPositionSync(offset);
+          data = await raf!.read(currentChunkSize);
+        }
         final tRead1 = DateTime.now().microsecondsSinceEpoch;
         readUs += tRead1 - tRead0;
+
+        // 读文件耗时长（最多 8MB），可能在读期间收到 PAUSE 指令，
+        // 立即回跳循环顶部等待恢复，不发送已读数据，避免延时暂停。
+        // 恢复后从同一 offset 重新读，不丢数据。
+        if (_paused && !_cancelled) continue;
 
         // 单次 socket.add() 发送完整 DATA 帧 (header + data + 4B zeroChecksum)，
         // 避免三次独立 add() + flush() 在 Android 原生层触发 StreamSink 内部状态冲突
