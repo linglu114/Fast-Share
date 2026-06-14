@@ -42,6 +42,7 @@ class _FastShareAppState extends ConsumerState<FastShareApp>
   final _navigatorKey = GlobalKey<NavigatorState>();
   TransferOffer? _lastShownOffer;
   bool _criticalDialogShownThisEpisode = false;
+  bool _shareFlowActive = false; // 防止 onShareReceived + getPendingShare 双触发
 
   @override
   void initState() {
@@ -54,10 +55,12 @@ class _FastShareAppState extends ConsumerState<FastShareApp>
     const shareChannel = MethodChannel('fastshare/share');
     shareChannel.setMethodCallHandler((call) async {
       if (call.method == 'onShareReceived') {
+        if (_shareFlowActive) return; // 已经在 getPendingShare 路径中
         final files = (call.arguments as List?)
             ?.map((e) => Map<String, dynamic>.from(e as Map))
             .toList();
         if (files != null && files.isNotEmpty && mounted) {
+          _shareFlowActive = true;
           ref.read(pendingShareFilesProvider.notifier).state = files;
           _handleSharedFiles(files);
         }
@@ -68,6 +71,8 @@ class _FastShareAppState extends ConsumerState<FastShareApp>
       try {
         final result = await shareChannel.invokeMethod('getPendingShare');
         if (result is List && result.isNotEmpty && mounted) {
+          if (_shareFlowActive) return; // 已被 onShareReceived 处理
+          _shareFlowActive = true;
           final files = result
               .map((e) => Map<String, dynamic>.from(e as Map))
               .toList();
@@ -136,10 +141,10 @@ class _FastShareAppState extends ConsumerState<FastShareApp>
     ref.read(currentTabProvider.notifier).state = 1;
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      if (!mounted) return;
+      if (!mounted) { _shareFlowActive = false; return; }
 
       final navigator = _navigatorKey.currentState;
-      if (navigator == null) return;
+      if (navigator == null) { _shareFlowActive = false; return; }
 
       final device = await showModalBottomSheet<Device?>(
         context: navigator.context,
@@ -148,17 +153,24 @@ class _FastShareAppState extends ConsumerState<FastShareApp>
         builder: (_) => _ShareDevicePicker(files: files),
       );
 
-      if (device == null || !mounted) return;
+      if (device == null || !mounted) {
+        _shareFlowActive = false;
+        ref.read(pendingShareFilesProvider.notifier).state = null;
+        return;
+      }
 
       // 确保连接
       final isConnected = ref.read(connectionStateProvider)[device.deviceId] == true;
       if (!isConnected) {
         try {
           await ref.read(connectionStateProvider.notifier).connect(device);
-        } catch (_) {}
+        } catch (_) {
+          _shareFlowActive = false;
+          return;
+        }
       }
 
-      if (!mounted) return;
+      if (!mounted) { _shareFlowActive = false; return; }
 
       // 开始传输
       await ref.read(transferNotifierProvider.notifier).startTransfer(
@@ -170,6 +182,7 @@ class _FastShareAppState extends ConsumerState<FastShareApp>
       );
 
       // 清除 pending 状态
+      _shareFlowActive = false;
       ref.read(pendingShareFilesProvider.notifier).state = null;
     });
   }
