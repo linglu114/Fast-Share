@@ -34,6 +34,7 @@ class ReceiveEngine {
   String? _transferId;
   String? _saveRoot;
   String? _fallbackRoot;
+  int _expectedFileCount = 0; // 从 offer 传入，防止遗漏 FILE_META 时提前完成
   bool _paused = false;
   bool _cancelled = false;
   String? _lastError;
@@ -114,14 +115,17 @@ class ReceiveEngine {
     _transferId = payload['transferId'] as String;
     _saveRoot = payload['savePath'] as String;
     _fallbackRoot = payload['fallbackPath'] as String?;
+    _expectedFileCount = payload['expectedFileCount'] as int? ?? 0;
     _lastFileIdStr = null;
     _lastFile = null;
     _lastFileIdBytes = null;
-    Logger.log('[RECV] _start: transferId=$_transferId saveRoot=$_saveRoot fallbackRoot=$_fallbackRoot');
+    Logger.log('[RECV] _start: transferId=$_transferId saveRoot=$_saveRoot fallbackRoot=$_fallbackRoot expectedFiles=$_expectedFileCount');
 
-    // Pre-create directory structure from pending file list
-    if (_pendingFiles.isNotEmpty) {
-      final paths = _pendingFiles
+    // Pre-create directory structure from inline file list (或 _pendingFiles 兼容)
+    final inlineFiles = (payload['files'] as List?)?.cast<Map<String, dynamic>>();
+    final filesToCreate = inlineFiles ?? _pendingFiles;
+    if (filesToCreate.isNotEmpty) {
+      final paths = filesToCreate
           .map((f) => (f['relativePath'] as String?)?.replaceAll('\\', '/'))
           .where((p) => p != null && p.contains('/'))
           .cast<String>()
@@ -142,7 +146,9 @@ class ReceiveEngine {
               }
             }
           }
-        } catch (_) {}
+        } catch (e) {
+          Logger.log('[RECV] _start: pre-create dirs failed: $e');
+        }
       }
       _pendingFiles.clear();
     }
@@ -497,8 +503,12 @@ class ReceiveEngine {
       'success': true,
     });
 
-    // Check if all files are done
-    final allDone = _files.values.every((f) => f.bytesWritten >= f.size);
+    // Check if all files are done — 必须等齐 _expectedFileCount 个文件全部到达
+    // 且全部完成才发送 TRANSFER_COMPLETE（防止遗漏 FILE_META 导致提前结束）
+    final allDone = _expectedFileCount > 0
+        ? _files.length >= _expectedFileCount &&
+          _files.values.every((f) => f.bytesWritten >= f.size)
+        : _files.values.every((f) => f.bytesWritten >= f.size);
     if (allDone) {
       _stopProgress();
       _sendTransferComplete(true);

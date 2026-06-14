@@ -472,13 +472,18 @@ class ConnectionManager {
         enginePort = data['enginePort'] as SendPort;
         _receiveEngines[transferId] = enginePort!;
 
-        // Send start command with fallback path
+        // Send start command with fallback path and expected file count
+        final meta = _receiveMeta[transferId];
+        final fileCount = meta?['fileCount'] as int? ?? 0;
+        final files = meta?['files'] as List?;
         enginePort!.send({
           'type': 'start',
           'payload': {
             'transferId': transferId,
             'savePath': savePath,
             if (fallbackPath != null) 'fallbackPath': fallbackPath,
+            'expectedFileCount': fileCount,
+            if (files != null) 'files': files,
           },
         });
 

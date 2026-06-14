@@ -1173,6 +1173,19 @@ class TransferSession {
       return;
     }
 
+    // Guard: 仅在全部文件已收到 FILE_COMPLETE 时才接受 TRANSFER_COMPLETE
+    // 防止接收端因遗漏 FILE_META 而提前发送 TRANSFER_COMPLETE
+    // （接收端只知道已注册的文件，若某文件 FILE_META 丢失则不会计入）
+    final allFilesConfirmed = _files.every((f) =>
+        _fileCompleted[f.fileId] == true || f.status == FileStatus.failed);
+    if (!allFilesConfirmed) {
+      final pending = _files.where((f) =>
+          _fileCompleted[f.fileId] != true && f.status != FileStatus.failed).toList();
+      Logger.log('[ENG] TRANSFER_COMPLETE received but ${pending.length} files still pending (${pending.map((f)=>f.relativePath).join(",")}), ignoring');
+      Logger.flushSync();
+      return; // 继续等待剩余文件的 FILE_COMPLETE
+    }
+
     _completed = true;
     _cleanupCacheFiles();
     if (_allFilesDone != null && !_allFilesDone!.isCompleted) {
