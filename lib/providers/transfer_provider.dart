@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:isolate';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
@@ -431,14 +432,54 @@ class TransferNotifier extends Notifier<void> {
     bool folderMode = false,
     required WidgetRef ref,
   }) async {
+    // ── Android 文件夹模式：在主 Isolate 展开目录 ──
+    // FilePicker.getDirectoryPath() 在 Android 通过 SAF 获取，
+    // 返回的是 /tree/primary:... 格式的虚拟路径，Engine Isolate
+    // 中 FileSystemEntity.typeSync() 无法识别导致 _files 为空。
+    // 在主 Isolate 中用 Directory.list() 递归展开为 contentFiles 数组，
+    // 每条带 realPath（真实路径）+ relativePath，Engine 直接打开文件。
+    List<String> finalPaths = paths;
+    List<Map<String, dynamic>>? finalContentFiles = contentFiles;
+    bool finalFolderMode = folderMode;
+
+    if (folderMode && Platform.isAndroid && paths.length == 1) {
+      try {
+        final dir = Directory(paths.first);
+        if (await dir.exists()) {
+          final expanded = <Map<String, dynamic>>[];
+          final dirPath = dir.path;
+          await for (final entity in dir.list(recursive: true)) {
+            if (entity is File) {
+              final abs = entity.path;
+              var rel = abs.substring(dirPath.length).replaceAll('\\', '/');
+              if (rel.startsWith('/')) rel = rel.substring(1);
+              expanded.add({
+                'uri': '',
+                'name': rel,
+                'size': await entity.length(),
+                'realPath': abs,
+              });
+            }
+          }
+          if (expanded.isNotEmpty) {
+            finalContentFiles = expanded;
+            finalPaths = [];
+            // folderMode 保留 true，接收端根据 relativePath 创建子目录
+          }
+        }
+      } catch (e) {
+        Logger.log('[TF] pre-scan directory failed: $e');
+      }
+    }
+
     // 并行：启动引擎 + 为 content URI 解析 fd 直读路径
     final engineReady = _ensureEngine();
 
     // 为无 realPath 的 content URI 打开文件描述符，
     // 让 Engine Isolate 通过 /proc/self/fd/$fd 直读，消除 Isolate 往返开销
     final resolvedContentFiles = <Map<String, dynamic>>[];
-    if (contentFiles != null) {
-      for (final f in contentFiles) {
+    if (finalContentFiles != null) {
+      for (final f in finalContentFiles) {
         final uri = f['uri'] as String? ?? '';
         final realPath = f['realPath'] as String?;
         if (realPath == null && uri.isNotEmpty && ContentUriReader.isSupported) {
@@ -460,8 +501,8 @@ class TransferNotifier extends Notifier<void> {
     // 创建任务 — batchName 统一用文件数量
     final count = resolvedContentFiles.isNotEmpty
         ? resolvedContentFiles.length
-        : paths.length;
-    final batchName = folderMode
+        : finalPaths.length;
+    final batchName = finalFolderMode
         ? '${count} 个文件（文件夹）'
         : '$count 个文件';
     final task = TransferTask(
@@ -473,7 +514,7 @@ class TransferNotifier extends Notifier<void> {
       totalSize: 0,
       fileCount: count,
       files: [],
-      folderMode: folderMode,
+      folderMode: finalFolderMode,
       status: TransferStatus.scanning,
       savePath: ref.read(downloadPathProvider),
     );
@@ -490,11 +531,11 @@ class TransferNotifier extends Notifier<void> {
       'type': EngineCommandType.startTransfer,
       'payload': {
         'transferId': transferId,
-        'paths': paths,
+        'paths': finalPaths,
         'contentFiles': resolvedContentFiles,
         'targetIp': targetDevice.ip,
         'targetPort': targetDevice.port,
-        'folderMode': folderMode,
+        'folderMode': finalFolderMode,
         'senderDeviceId': settings.deviceId ?? 'unknown',
         'senderDeviceName': settings.deviceName,
         'downloadPath': ref.read(downloadPathProvider),
@@ -502,7 +543,7 @@ class TransferNotifier extends Notifier<void> {
         'concurrentCount': ref.read(concurrentCountProvider),
         'retryCount': settings.retryCount,
         'tempDir': tempDir,
-        'logDir': tempDir, // Engine Isolate 日志目录（Android 上 CWD 只读，需显式传入）
+        'logDir': tempDir,
       },
     });
   }
