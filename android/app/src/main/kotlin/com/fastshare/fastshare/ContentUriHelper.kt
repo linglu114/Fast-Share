@@ -198,7 +198,11 @@ object ContentUriHelper {
             return emptyList()
         }
 
-        return traverseTree(context, rootDoc, "")
+        // Include the selected folder name as the base prefix so the receiver
+        // creates files under SavePath/SelectedFolder/... instead of flat in SavePath.
+        val baseName = rootDoc.name ?: ""
+        val prefix = if (baseName.isNotEmpty()) "$baseName/" else ""
+        return traverseTree(context, rootDoc, prefix)
     }
 
     /// Recursively traverse [parent], collecting file entries into a flat list.
