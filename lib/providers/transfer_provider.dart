@@ -168,6 +168,14 @@ class TransferNotifier extends Notifier<void> {
       if (task.files.isNotEmpty) {
         task.fileCount = task.files.length; // 文件夹递归后的真实数量
       }
+      // 同步更新队列中的同一条目
+      final queue = ref.read(transferQueueProvider);
+      final idx = queue.indexWhere((t) => t.transferId == transferId);
+      if (idx >= 0) {
+        queue[idx].totalSize = totalSize;
+        queue[idx].fileCount = task.fileCount;
+        ref.read(transferQueueProvider.notifier).state = [...queue];
+      }
       return task.clone();
     });
   }
