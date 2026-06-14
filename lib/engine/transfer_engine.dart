@@ -182,7 +182,6 @@ class TransferSession {
   bool _cancelled = false;
   bool _completed = false;
   bool _socketClosed = false;
-  bool _pauseFramePending = false; // 在 chunk 间安全边界发送 TRANSFER_PAUSE
   bool _resumeFramePending = false; // 在 chunk 间安全边界发送 TRANSFER_RESUME
   bool _cancelling = false; // 防止 cancel() 重入
 
@@ -348,14 +347,28 @@ class TransferSession {
 
   void pause() {
     _paused = true;
-    _pauseFramePending = true; // 由 chunk 循环在下一个安全边界发送
+    // 立即发送 PAUSE 到 socket（单次 _sendRawBytes 不与 chunk 数据交织），
+    // 接收端暂停期间缓冲后到的 chunk 数据，不会丢失
+    if (!_socketClosed) {
+      try {
+        final pauseFrame = TransferControlMessages.buildPause(transferId: transferId);
+        _sendRawBytes(pauseFrame.toBytes());
+      } catch (_) {}
+    }
     _sendEvent('progress', _progressData());
   }
 
   void resume() {
     _paused = false;
-    _pauseFramePending = false;
-    _resumeFramePending = true; // 由 chunk 循环在下一个安全边界发送
+    // 立即发送 RESUME；chunk 循环中仍保留 _resumeFramePending 作为安全补充
+    _resumeFramePending = true;
+    if (!_socketClosed) {
+      try {
+        final resumeFrame = TransferControlMessages.buildResume(transferId: transferId);
+        _sendRawBytes(resumeFrame.toBytes());
+        _resumeFramePending = false;
+      } catch (_) {}
+    }
     _sendEvent('progress', _progressData());
   }
 
@@ -730,16 +743,6 @@ class TransferSession {
 
         _updateSpeed();
         _notifyProgress();
-
-        // 在两个 chunk 之间的安全边界发送 TRANSFER_PAUSE，
-        // 此时 header+data+checksum 完整写入，不会与控制帧交织
-        if (_pauseFramePending && !_socketClosed) {
-          _pauseFramePending = false;
-          try {
-            final pauseFrame = TransferControlMessages.buildPause(transferId: transferId);
-            _sendRawBytes(pauseFrame.toBytes());
-          } catch (_) {}
-        }
 
         // 每 10 chunk 输出一次计时分布
         if (i % 10 == 9 || i == totalChunks - 1) {

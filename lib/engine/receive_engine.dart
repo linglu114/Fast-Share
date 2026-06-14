@@ -36,6 +36,7 @@ class ReceiveEngine {
   String? _fallbackRoot;
   int _expectedFileCount = 0; // 从 offer 传入，防止遗漏 FILE_META 时提前完成
   bool _paused = false;
+  final List<Map<String, dynamic>> _pausedBuffer = []; // 暂停期间缓冲不丢失
   bool _cancelled = false;
   String? _lastError;
   List<Map<String, dynamic>> _pendingFiles = []; // for directory pre-creation
@@ -178,8 +179,14 @@ class ReceiveEngine {
     _paused = false;
     _lastSpeedBytes = _totalBytesWritten;
     _lastAckBytes = _totalBytesWritten;
+    // 先处理暂停期间缓冲的数据（发送端并发 slot 在 PAUSE 帧后仍可能发送 chunk）
+    final buffer = List<Map<String, dynamic>>.from(_pausedBuffer);
+    _pausedBuffer.clear();
+    for (final p in buffer) {
+      _handleData(p);
+    }
     _sendEvent('transfer_resumed', {'transferId': _transferId});
-    // 恢复后立即发送一次 ACK，通知发送端当前进度（暂停期间可能漏了批次）
+    // 恢复后立即发送一次 ACK，通知发送端当前进度
     _sendAcksForAllActive();
     _startProgress();
   }
@@ -229,7 +236,12 @@ class ReceiveEngine {
   // ═══════════════════════════════════════════════════════════
 
   void _handleData(Map<String, dynamic> payload) {
-    if (_paused || _cancelled || _transferId == null) return;
+    if (_cancelled || _transferId == null) return;
+    // 暂停期间缓冲数据，恢复后统一处理，防止并发 slot 在 PAUSE 帧后仍发送的 chunk 丢失
+    if (_paused) {
+      _pausedBuffer.add(payload);
+      return;
+    }
 
     final rawBytes = payload['rawBytes'] as Uint8List;
 
