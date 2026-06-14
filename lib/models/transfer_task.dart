@@ -62,8 +62,6 @@ class TransferTask {
   final String? peerDeviceName;
   final String? batchName;
   int totalSize;
-  /// 文件总数 — 首次设置后稳定（接收端从 offer，发送端从 file_list_chunk）
-  int fileCount;
   List<FileTransferItem> files;
   final bool folderMode;
 
@@ -97,9 +95,7 @@ class TransferTask {
     this.completedAt,
     this.errorMessage,
     this.savePath = '',
-    int? fileCount,
   })  : transferId = transferId ?? const Uuid().v4(),
-        fileCount = fileCount ?? files.length,
         createdAt = createdAt ?? DateTime.now();
 
   /// 创建浅拷贝（引用不同，触发 Riverpod 通知）
@@ -111,7 +107,6 @@ class TransferTask {
       peerDeviceName: peerDeviceName,
       batchName: batchName,
       totalSize: totalSize,
-      fileCount: fileCount,
       files: List<FileTransferItem>.from(files),
       folderMode: folderMode,
       status: status,
@@ -133,6 +128,9 @@ class TransferTask {
   /// 剩余文件数
   int get remainingFiles =>
       files.where((f) => f.status == TransferStatus.pending).length;
+
+  /// 文件数量
+  int get fileCount => files.length;
 }
 
 /// 字节范围 (用于断点续传)

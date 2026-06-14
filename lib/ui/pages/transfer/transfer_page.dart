@@ -272,6 +272,7 @@ class _ActiveTransferCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // ── 头部：目标设备 + 状态 ──
             Row(
               children: [
                 const Icon(Icons.swap_horiz, size: 20),
@@ -282,7 +283,7 @@ class _ActiveTransferCard extends StatelessWidget {
                     style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
                   ),
                 ),
-                _sharedStatusChip(task.status),
+                _buildStatusChip(task.status),
               ],
             ),
             const SizedBox(height: 4),
@@ -291,7 +292,32 @@ class _ActiveTransferCard extends StatelessWidget {
             const SizedBox(height: 2),
             Text('${task.fileCount} 个文件 · ${formatSize(task.totalSize)}',
                 style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+            // ── 文件列表 ──
+            if (task.files.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              ...task.files.take(10).map((f) => Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 1),
+                    child: Row(
+                      children: [
+                        Icon(Icons.insert_drive_file,
+                            size: 14, color: cs.onSurfaceVariant),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(f.relativePath,
+                              style: const TextStyle(fontSize: 12),
+                              overflow: TextOverflow.ellipsis),
+                        ),
+                        Text(formatSize(f.size),
+                            style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
+                      ],
+                    ),
+                  )),
+              if (task.files.length > 10)
+                Text('... 还有 ${task.files.length - 10} 个文件',
+                    style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
+            ],
             const SizedBox(height: 12),
+            // ── 进度条 ──
             LinearProgressIndicator(
               value: task.progress,
               minHeight: 6,
@@ -301,10 +327,14 @@ class _ActiveTransferCard extends StatelessWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('${formatSize(task.bytesTransferred)} / ${formatSize(task.totalSize)}',
-                    style: const TextStyle(fontSize: 13)),
-                Text('${(task.progress * 100).toStringAsFixed(1)}%',
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                Text(
+                  '${formatSize(task.bytesTransferred)} / ${formatSize(task.totalSize)}',
+                  style: const TextStyle(fontSize: 13),
+                ),
+                Text(
+                  '${(task.progress * 100).toStringAsFixed(1)}%',
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                ),
               ],
             ),
             const SizedBox(height: 4),
@@ -313,8 +343,10 @@ class _ActiveTransferCard extends StatelessWidget {
                 _SpeedChip(bytesPerSecond: task.avgSpeed),
                 const SizedBox(width: 12),
                 if (task.avgSpeed > 0)
-                  Text(formatEta(task.totalSize, task.bytesTransferred, task.avgSpeed),
-                      style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+                  Text(
+                    formatEta(task.totalSize, task.bytesTransferred, task.avgSpeed),
+                    style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+                  ),
                 const Spacer(),
                 Text(
                   '${task.files.where((f) => f.status == TransferStatus.completed).length}/${task.fileCount} 完成',
@@ -329,38 +361,57 @@ class _ActiveTransferCard extends StatelessWidget {
                     style: TextStyle(fontSize: 12, color: Colors.red.shade700)),
               ),
             const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                if (task.status == TransferStatus.transferring)
-                  IconButton(icon: const Icon(Icons.pause, size: 20), tooltip: '暂停',
-                      onPressed: () => ref.read(transferNotifierProvider.notifier).pauseTransfer(task.transferId)),
-                if (task.status == TransferStatus.paused)
-                  IconButton(icon: const Icon(Icons.play_arrow, size: 20), tooltip: '继续',
-                      onPressed: () => ref.read(transferNotifierProvider.notifier).resumeTransfer(task.transferId)),
-                if (task.status == TransferStatus.transferring || task.status == TransferStatus.paused ||
-                    task.status == TransferStatus.awaitingAccept || task.status == TransferStatus.connecting ||
-                    task.status == TransferStatus.scanning)
-                  IconButton(icon: const Icon(Icons.close, size: 20), tooltip: '取消',
-                      onPressed: () => ref.read(transferNotifierProvider.notifier).cancelTransfer(task.transferId)),
-                if (task.status == TransferStatus.completed || task.status == TransferStatus.failed ||
-                    task.status == TransferStatus.cancelled || task.status == TransferStatus.rejected)
-                  TextButton(
-                    onPressed: () {
-                      ref.read(activeTransferProvider.notifier).state = null;
-                      final queue = ref.read(transferQueueProvider);
-                      ref.read(transferQueueProvider.notifier).state =
-                          queue.where((t) => t.transferId != task.transferId).toList();
-                    },
-                    child: const Text('关闭'),
-                  ),
-              ],
-            ),
+            _buildActions(task, ref),
           ],
         ),
       ),
     );
   }
+
+  Widget _buildActions(TransferTask task, WidgetRef ref) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.end,
+      children: [
+        if (task.status == TransferStatus.transferring)
+          IconButton(
+              icon: const Icon(Icons.pause, size: 20),
+              tooltip: '暂停',
+              onPressed: () =>
+                  ref.read(transferNotifierProvider.notifier).pauseTransfer(task.transferId)),
+        if (task.status == TransferStatus.paused)
+          IconButton(
+              icon: const Icon(Icons.play_arrow, size: 20),
+              tooltip: '继续',
+              onPressed: () =>
+                  ref.read(transferNotifierProvider.notifier).resumeTransfer(task.transferId)),
+        if (task.status == TransferStatus.transferring ||
+            task.status == TransferStatus.paused ||
+            task.status == TransferStatus.awaitingAccept ||
+            task.status == TransferStatus.connecting ||
+            task.status == TransferStatus.scanning)
+          IconButton(
+              icon: const Icon(Icons.close, size: 20),
+              tooltip: '取消',
+              onPressed: () =>
+                  ref.read(transferNotifierProvider.notifier).cancelTransfer(task.transferId)),
+        if (task.status == TransferStatus.completed ||
+            task.status == TransferStatus.failed ||
+            task.status == TransferStatus.cancelled ||
+            task.status == TransferStatus.rejected)
+          TextButton(
+            onPressed: () {
+              ref.read(activeTransferProvider.notifier).state = null;
+              final queue = ref.read(transferQueueProvider);
+              ref.read(transferQueueProvider.notifier).state =
+                  queue.where((t) => t.transferId != task.transferId).toList();
+            },
+            child: const Text('关闭'),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildStatusChip(TransferStatus status) => _sharedStatusChip(status);
 }
 
 class _ReceiveTransferCard extends StatelessWidget {
@@ -378,6 +429,7 @@ class _ReceiveTransferCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // ── 头部：来源 + 状态 ──
             Row(
               children: [
                 const Icon(Icons.swap_horiz, size: 20),
@@ -388,7 +440,7 @@ class _ReceiveTransferCard extends StatelessWidget {
                     style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
                   ),
                 ),
-                _sharedStatusChip(task.status),
+                _buildStatusChip(task.status),
               ],
             ),
             const SizedBox(height: 4),
@@ -397,7 +449,32 @@ class _ReceiveTransferCard extends StatelessWidget {
             const SizedBox(height: 2),
             Text('${task.fileCount} 个文件 · ${formatSize(task.totalSize)}',
                 style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+            // ── 文件列表 ──
+            if (task.files.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              ...task.files.take(10).map((f) => Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 1),
+                    child: Row(
+                      children: [
+                        Icon(Icons.insert_drive_file,
+                            size: 14, color: cs.onSurfaceVariant),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(f.relativePath,
+                              style: const TextStyle(fontSize: 12),
+                              overflow: TextOverflow.ellipsis),
+                        ),
+                        Text(formatSize(f.size),
+                            style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
+                      ],
+                    ),
+                  )),
+              if (task.files.length > 10)
+                Text('... 还有 ${task.files.length - 10} 个文件',
+                    style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
+            ],
             const SizedBox(height: 12),
+            // ── 进度条 ──
             LinearProgressIndicator(
               value: task.progress,
               minHeight: 6,
@@ -407,10 +484,14 @@ class _ReceiveTransferCard extends StatelessWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('${formatSize(task.bytesTransferred)} / ${formatSize(task.totalSize)}',
-                    style: const TextStyle(fontSize: 13)),
-                Text('${(task.progress * 100).toStringAsFixed(1)}%',
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                Text(
+                  '${formatSize(task.bytesTransferred)} / ${formatSize(task.totalSize)}',
+                  style: const TextStyle(fontSize: 13),
+                ),
+                Text(
+                  '${(task.progress * 100).toStringAsFixed(1)}%',
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                ),
               ],
             ),
             const SizedBox(height: 4),
@@ -443,13 +524,18 @@ class _ReceiveTransferCard extends StatelessWidget {
                 ),
                 if (task.status == TransferStatus.transferring)
                   IconButton(
-                      icon: const Icon(Icons.close, size: 20), tooltip: '取消',
-                      onPressed: () => ref.read(connectionStateProvider.notifier)
+                      icon: const Icon(Icons.close, size: 20),
+                      tooltip: '取消',
+                      onPressed: () => ref
+                          .read(connectionStateProvider.notifier)
                           .cancelReceiveTransfer(task.senderDeviceId, task.transferId)),
-                if (task.status == TransferStatus.completed || task.status == TransferStatus.failed ||
-                    task.status == TransferStatus.cancelled || task.status == TransferStatus.rejected)
+                if (task.status == TransferStatus.completed ||
+                    task.status == TransferStatus.failed ||
+                    task.status == TransferStatus.cancelled ||
+                    task.status == TransferStatus.rejected)
                   TextButton(
-                    onPressed: () => ref.read(receiveTransferProvider.notifier).state = null,
+                    onPressed: () =>
+                        ref.read(receiveTransferProvider.notifier).state = null,
                     child: const Text('关闭'),
                   ),
               ],
@@ -459,6 +545,8 @@ class _ReceiveTransferCard extends StatelessWidget {
       ),
     );
   }
+
+  Widget _buildStatusChip(TransferStatus status) => _sharedStatusChip(status);
 }
 
 class _QueueItem extends StatelessWidget {
