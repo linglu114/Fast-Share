@@ -416,7 +416,9 @@ class ReceiveEngine {
       return;
     }
     _ackTimer ??= Timer(_ackInterval, () {
-      _sendAck(fileId);
+      // 发送所有活跃文件的 ACK（而非仅设置定时器时的 fileId），
+      // 避免因 fileId 对应的文件已完成导致 ACK 被静默丢弃
+      _sendAcksForAllActive();
       _lastAckBytes = _totalBytesWritten;
       _ackTimer = null;
     });
@@ -436,6 +438,24 @@ class ReceiveEngine {
     }));
     final frame = FlpFrame(type: FlpMessageType.fileAck, payload: Uint8List.fromList(ackPayload));
     _sendFrameToUi(frame);
+  }
+
+  /// 为所有未完成的文件发送 ACK，防止定时器回调 fileId 过期
+  void _sendAcksForAllActive() {
+    for (final rf in _files.values) {
+      if (rf.bytesWritten < rf.size) {
+        final ackPayload = utf8.encode(jsonEncode({
+          'transferId': _transferId,
+          'fileId': rf.fileId,
+          'ackOffset': rf.bytesWritten,
+          'receivedRanges': [
+            [0, rf.bytesWritten]
+          ],
+        }));
+        final frame = FlpFrame(type: FlpMessageType.fileAck, payload: Uint8List.fromList(ackPayload));
+        _sendFrameToUi(frame);
+      }
+    }
   }
 
   void _onFileComplete(String fileId) {

@@ -82,19 +82,19 @@ class SlidingWindow {
   final int maxBytes;
 
   int _pendingBytes = 0;
-  final _waiters = <Completer<void>>[];
+  final _waiters = <_WindowWaiter>[];
 
   SlidingWindow({this.maxBytes = maxPendingBytes});
 
   /// 尝试分配空间，超出则等待
   Future<void> acquire(int bytes) async {
-    if (_pendingBytes + bytes <= maxBytes) {
+    if (_pendingBytes + bytes <= maxBytes && _waiters.isEmpty) {
       _pendingBytes += bytes;
       return;
     }
 
     final completer = Completer<void>();
-    _waiters.add(completer);
+    _waiters.add(_WindowWaiter(completer, bytes));
     await completer.future;
     _pendingBytes += bytes;
   }
@@ -103,13 +103,15 @@ class SlidingWindow {
   void release(int bytes) {
     _pendingBytes -= bytes;
 
-    // 唤醒等待者
+    // 按 FIFO 顺序唤醒等待者，仅在剩余空间足够时释放
     while (_waiters.isNotEmpty) {
-      final next = _waiters.first;
-      final canProceed = _pendingBytes < maxBytes;
-      if (canProceed) {
+      final waiter = _waiters.first;
+      if (_pendingBytes + waiter.bytes <= maxBytes) {
         _waiters.removeAt(0);
-        next.complete();
+        waiter.completer.complete();
+        // acquire() 会在 completer 完成后立即 _pendingBytes += bytes，
+        // 所以这里需要预先占用空间防止超额：
+        _pendingBytes += waiter.bytes;
       } else {
         break;
       }
@@ -118,6 +120,12 @@ class SlidingWindow {
 
   int get pendingBytes => _pendingBytes;
   double get usage => maxBytes > 0 ? _pendingBytes / maxBytes : 0;
+}
+
+class _WindowWaiter {
+  final Completer<void> completer;
+  final int bytes;
+  const _WindowWaiter(this.completer, this.bytes);
 }
 
 /// 缓冲区复用池 — 避免频繁分配/释放

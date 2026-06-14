@@ -188,6 +188,7 @@ class TransferSession {
   final Map<String, Completer<void>> _ackWaiters = {};
   final Map<String, Completer<Uint8List>> _chunkWaiters = {};
   final Map<String, bool> _fileCompleted = {};
+  final Set<String> _retransferring = {}; // 防止并发重传同一文件
   Completer<void>? _allFilesDone;
   Completer<void>? _acceptReceived;
   bool _acceptRejected = false;
@@ -719,6 +720,7 @@ class TransferSession {
         Logger.log('[ENG] FILE_COMPLETE timeout! retries=${file.retries}/$retryCount');
         if (file.retries < retryCount) {
           file.retries++;
+          _resetFileProgress(file);
           await _transferSingleFile(file);
           return;
         }
@@ -741,6 +743,7 @@ class TransferSession {
         // FILE_COMPLETE with success=false
         if (file.retries < retryCount) {
           file.retries++;
+          _resetFileProgress(file);
           await _transferSingleFile(file);
           return;
         }
@@ -759,9 +762,7 @@ class TransferSession {
         if (!useContentUri) {
           raf?.setPositionSync(0);
         }
-        offset = 0;
-        _bytesTransferred -= file.bytesTransferred;
-        file.bytesTransferred = 0;
+        _resetFileProgress(file);
         await _transferSingleFile(file);
       } else {
         file.status = FileStatus.failed;
@@ -1116,10 +1117,16 @@ class TransferSession {
   void _resendRange(String fileId, int start, int end) {
     final file = _files.where((f) => f.fileId == fileId).firstOrNull;
     if (file == null) return;
+    // Guard against concurrent retransfers of the same file from duplicate NACKs
+    if (_retransferring.contains(fileId)) return;
     // 简化：重新发送整个文件（后续可优化为只重发 missingRanges）
     file.retries++;
     if (file.retries <= retryCount) {
-      _transferSingleFile(file);
+      _retransferring.add(fileId);
+      _resetFileProgress(file);
+      _transferSingleFile(file).then((_) {
+        _retransferring.remove(fileId);
+      });
     }
   }
 
@@ -1254,6 +1261,14 @@ class TransferSession {
   // 辅助方法
   // ═══════════════════════════════════════════════════════════
 
+  /// 文件重传时重置进度计数器，防止 _totalAckedBytes 累积旧值
+  void _resetFileProgress(FileEntry file) {
+    _totalAckedBytes -= file.lastAckedOffset;
+    _bytesTransferred -= file.bytesTransferred;
+    file.lastAckedOffset = 0;
+    file.bytesTransferred = 0;
+  }
+
   void _sendFileListChunk() {
     final summaries = _files.map((f) => {
       'fileId': f.fileId,
@@ -1368,12 +1383,15 @@ enum FileStatus { pending, transferring, completed, failed }
 enum TransferStrategy { sequential, concurrent, mixed }
 
 /// 令牌桶限速器 (需求 §16)
+///
+/// 使用 FIFO 等待队列 + 精确令牌分配，每次补充后只唤醒能
+/// 被当前令牌数满足的等待者，防止 _tokens 被扣至负值。
 class TokenBucket {
   final int _maxRate; // bytes/s
   int _tokens;
   int _lastRefill;
   Timer? _timer;
-  final _waiters = <int, Completer<void>>{};
+  final _waiters = <int, _TokenWaiter>{};
   int _waiterId = 0;
 
   TokenBucket(this._maxRate)
@@ -1391,34 +1409,52 @@ class TokenBucket {
   }
 
   Future<void> consume(int bytes) async {
-    if (bytes <= _tokens) {
+    if (bytes <= _tokens && _waiters.isEmpty) {
       _tokens -= bytes;
       return;
     }
 
     final id = _waiterId++;
     final completer = Completer<void>();
-    _waiters[id] = completer;
+    _waiters[id] = _TokenWaiter(completer, bytes);
+    // Re-check: tokens may have been refilled since we entered
+    _processWaiters();
     await completer.future;
-    _tokens -= bytes;
+    // 防御：被唤醒时再次确认令牌足够
+    if (bytes <= _tokens) {
+      _tokens -= bytes;
+    }
   }
 
   void _processWaiters() {
-    final toRemove = <int>[];
-    for (final entry in _waiters.entries) {
-      toRemove.add(entry.key);
-      entry.value.complete();
-    }
-    for (final id in toRemove) {
-      _waiters.remove(id);
+    if (_waiters.isEmpty) return;
+    // FIFO: wake waiters in order until tokens run out
+    final ids = _waiters.keys.toList(); // insertion-ordered map
+    for (final id in ids) {
+      final w = _waiters[id];
+      if (w == null || w.completer.isCompleted) {
+        _waiters.remove(id);
+        continue;
+      }
+      if (w.bytes <= _tokens) {
+        _tokens -= w.bytes;
+        w.completer.complete();
+        _waiters.remove(id);
+      }
     }
   }
 
   void stop() {
     _timer?.cancel();
-    for (final c in _waiters.values) {
-      if (!c.isCompleted) c.complete();
+    for (final w in _waiters.values) {
+      if (!w.completer.isCompleted) w.completer.complete();
     }
     _waiters.clear();
   }
+}
+
+class _TokenWaiter {
+  final Completer<void> completer;
+  final int bytes;
+  const _TokenWaiter(this.completer, this.bytes);
 }

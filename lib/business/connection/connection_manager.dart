@@ -252,41 +252,6 @@ class ConnectionManager {
 
   // ═══ 帧处理 ═══
 
-  void _listenToSocket(String deviceId, Socket socket) {
-    Uint8List buffer = Uint8List(0);
-
-    socket.listen(
-      (data) {
-        // 高效 buffer 拼接，避免 list spread 的二次拷贝
-        final newLen = buffer.length + data.length;
-        final newBuffer = Uint8List(newLen);
-        newBuffer.setAll(0, buffer);
-        newBuffer.setAll(buffer.length, data);
-        buffer = newBuffer;
-
-        while (buffer.length >= FlpFrame.headerLength + FlpFrame.checksumLength) {
-          final bd = ByteData.sublistView(buffer);
-          final payloadLen = bd.getUint32(8, Endian.big);
-          final totalLen = FlpFrame.headerLength + payloadLen + FlpFrame.checksumLength;
-          if (buffer.length < totalLen) break;
-
-          try {
-            final frame = FlpFrame.parse(Uint8List.sublistView(buffer, 0, totalLen));
-            _dispatchFrame(deviceId, frame);
-          } catch (e) {
-            _frameController.addError(
-              FormatException('Frame parse failed from $deviceId: $e'),
-            );
-          }
-
-          buffer = Uint8List.sublistView(buffer, totalLen);
-        }
-      },
-      onError: (_) => disconnect(deviceId),
-      onDone: () => disconnect(deviceId),
-    );
-  }
-
   void _handleFrame(String deviceId, FlpFrame frame) {
     switch (frame.type) {
       case FlpMessageType.helloAck:
