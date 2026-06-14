@@ -227,8 +227,9 @@ class ConnectionNotifier extends Notifier<Map<String, bool>> {
       senderDeviceId: offer.senderDeviceId,
       targetDeviceId: ref.read(localDeviceProvider).deviceId,
       peerDeviceName: offer.senderDeviceName ?? offer.senderDeviceId,
-      batchName: offer.batchName ?? '${offer.fileCount} 个文件',
+      batchName: '${offer.fileCount} 个文件',
       totalSize: offer.totalSize,
+      fileCount: offer.fileCount,
       files: offer.files
           .map((f) => FileTransferItem(
                 fileId: f['fileId'] as String? ?? '',

@@ -165,6 +165,9 @@ class TransferNotifier extends Notifier<void> {
         relativePath: f['relativePath'] as String? ?? '',
         size: f['size'] as int? ?? 0,
       )).toList();
+      if (task.files.isNotEmpty) {
+        task.fileCount = task.files.length; // 文件夹递归后的真实数量
+      }
       return task.clone();
     });
   }
@@ -446,16 +449,13 @@ class TransferNotifier extends Notifier<void> {
     final transferId = _uuid.v4();
     final settings = ref.read(settingsRepositoryProvider);
 
-    // 创建任务
+    // 创建任务 — batchName 统一用文件数量
+    final count = resolvedContentFiles.isNotEmpty
+        ? resolvedContentFiles.length
+        : paths.length;
     final batchName = folderMode
-        ? '文件夹: ${paths.first.split('/').last.split('\\').last}'
-        : (resolvedContentFiles.isNotEmpty)
-            ? resolvedContentFiles.length == 1
-                ? resolvedContentFiles.first['name'] ?? 'unknown'
-                : '${resolvedContentFiles.length} 个文件'
-            : paths.length == 1
-                ? paths.first.split('/').last.split('\\').last
-                : '${paths.length} 个文件';
+        ? '${count} 个文件（文件夹）'
+        : '$count 个文件';
     final task = TransferTask(
       transferId: transferId,
       senderDeviceId: settings.deviceId ?? 'unknown',
@@ -463,6 +463,7 @@ class TransferNotifier extends Notifier<void> {
       peerDeviceName: targetDevice.name,
       batchName: batchName,
       totalSize: 0,
+      fileCount: count,
       files: [],
       folderMode: folderMode,
       status: TransferStatus.scanning,

@@ -62,6 +62,8 @@ class TransferTask {
   final String? peerDeviceName;
   final String? batchName;
   int totalSize;
+  /// 文件总数 — 存储字段，不受 files 列表变化影响
+  int fileCount;
   List<FileTransferItem> files;
   final bool folderMode;
 
@@ -84,6 +86,7 @@ class TransferTask {
     this.batchName,
     required this.totalSize,
     required this.files,
+    required this.fileCount,
     this.folderMode = false,
     this.status = TransferStatus.pending,
     this.mode = TransferMode.concurrent,
@@ -107,6 +110,7 @@ class TransferTask {
       peerDeviceName: peerDeviceName,
       batchName: batchName,
       totalSize: totalSize,
+      fileCount: fileCount,
       files: List<FileTransferItem>.from(files),
       folderMode: folderMode,
       status: status,
@@ -128,9 +132,6 @@ class TransferTask {
   /// 剩余文件数
   int get remainingFiles =>
       files.where((f) => f.status == TransferStatus.pending).length;
-
-  /// 文件数量
-  int get fileCount => files.length;
 }
 
 /// 字节范围 (用于断点续传)
