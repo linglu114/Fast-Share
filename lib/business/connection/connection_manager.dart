@@ -183,6 +183,12 @@ class ConnectionManager {
             _engineConnections[deviceId] = conn.socket;
             _engineTcpConns[deviceId] = conn;
 
+            // 监听 engine 连接上的控制帧 (PAUSE/RESUME/CANCEL)，
+            // FILE_DATA/FILE_META 已被 onRawFrame 钩子消费，不会重复处理
+            conn.onFrame.listen((frame) {
+              _dispatchFrame(deviceId, frame);
+            });
+
             // Transfer onRawFrame hook from discovery to engine connection for active transfers
             final discoveryConn = _tcpConns[deviceId];
             for (final tid in _receiverDevice.keys.where((k) => _receiverDevice[k] == deviceId).toList()) {
