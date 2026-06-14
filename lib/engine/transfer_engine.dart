@@ -653,6 +653,16 @@ class TransferSession {
           await Future.delayed(const Duration(milliseconds: 100));
         }
 
+        // 恢复后立即在安全边界发送 TRANSFER_RESUME：此时刚退出 while(_paused)，
+        // 无 FILE_DATA 正在写入 socket，不会与控制帧交织
+        if (_resumeFramePending && !_socketClosed) {
+          _resumeFramePending = false;
+          try {
+            final resumeFrame = TransferControlMessages.buildResume(transferId: transferId);
+            _socket?.add(resumeFrame.toBytes());
+          } catch (_) {}
+        }
+
         final remaining = file.size - offset;
         final currentChunkSize = min(chunkSize, remaining);
 
@@ -723,6 +733,16 @@ class TransferSession {
 
       // socket 已死（发送过程中被错误回调关闭）→ 直接返回，不白白等 120s
       if (_socketClosed || _cancelled) return;
+
+      // 全部 chunk 已发完，但 resume 标志可能残存 → 补发 TRANSFER_RESUME，
+      // 否则接收端仍处于 paused 状态，永远不会回复 FILE_COMPLETE
+      if (_resumeFramePending && !_socketClosed) {
+        _resumeFramePending = false;
+        try {
+          final resumeFrame = TransferControlMessages.buildResume(transferId: transferId);
+          _socket?.add(resumeFrame.toBytes());
+        } catch (_) {}
+      }
 
       // 等待接收端 FILE_COMPLETE 确认（超时 120s，给慢速磁盘足够时间）
       final ackCompleter = Completer<void>();
