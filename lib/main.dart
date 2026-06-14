@@ -62,10 +62,6 @@ void main() async {
   // 初始化数据库
   await AppDatabase.database;
 
-  // Android 系统分享通道 — 在 runApp 前注册 MethodChannel
-  final shareChannel = MethodChannel('fastshare/share');
-  // 这里只是确保通道存在，实际监听在 app.dart 中设置
-
   runApp(
     ProviderScope(
       overrides: [

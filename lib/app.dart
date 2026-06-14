@@ -49,35 +49,33 @@ class _FastShareAppState extends ConsumerState<FastShareApp>
     WidgetsBinding.instance.addObserver(this);
 
     // ── 系统分享入口 ──
-    if (const bool.fromEnvironment('dart.vm.product') || true) {
-      // Always register: product mode for real use, debug for testing
-      final shareChannel = const MethodChannel('fastshare/share');
-      shareChannel.setMethodCallHandler((call) async {
-        if (call.method == 'onShareReceived') {
-          final files = (call.arguments as List?)
-              ?.map((e) => Map<String, dynamic>.from(e as Map))
-              .toList();
-          if (files != null && files.isNotEmpty && mounted) {
-            ref.read(pendingShareFilesProvider.notifier).state = files;
-            _handleSharedFiles(files);
-          }
+    // 热启动: 收到 onShareReceived 调用后弹出设备选择器
+    // 冷启动: 首帧后 poll getPendingShare 拉取 onCreate 缓存的分享数据
+    const shareChannel = MethodChannel('fastshare/share');
+    shareChannel.setMethodCallHandler((call) async {
+      if (call.method == 'onShareReceived') {
+        final files = (call.arguments as List?)
+            ?.map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+        if (files != null && files.isNotEmpty && mounted) {
+          ref.read(pendingShareFilesProvider.notifier).state = files;
+          _handleSharedFiles(files);
         }
-      });
+      }
+    });
 
-      // Cold start: poll for pending share data from launch intent
-      WidgetsBinding.instance.addPostFrameCallback((_) async {
-        try {
-          final result = await shareChannel.invokeMethod('getPendingShare');
-          if (result is List && result.isNotEmpty && mounted) {
-            final files = result
-                .map((e) => Map<String, dynamic>.from(e as Map))
-                .toList();
-            ref.read(pendingShareFilesProvider.notifier).state = files;
-            _handleSharedFiles(files);
-          }
-        } catch (_) {}
-      });
-    }
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      try {
+        final result = await shareChannel.invokeMethod('getPendingShare');
+        if (result is List && result.isNotEmpty && mounted) {
+          final files = result
+              .map((e) => Map<String, dynamic>.from(e as Map))
+              .toList();
+          ref.read(pendingShareFilesProvider.notifier).state = files;
+          _handleSharedFiles(files);
+        }
+      } catch (_) {}
+    });
   }
 
   @override
@@ -130,59 +128,24 @@ class _FastShareAppState extends ConsumerState<FastShareApp>
   }
 
   /// 系统分享入口 — 收到文件后弹出设备选择器并开始传输
+  ///
+  /// 冷启动时发现服务尚未完成首次广播，直接读 onlineDevicesProvider 会得到空列表。
+  /// 因此这里立即弹出底部弹窗 —— 空时显示扫描动画，设备上线后自动刷新。
   void _handleSharedFiles(List<Map<String, dynamic>> files) {
     // 切换到传输页
     ref.read(currentTabProvider.notifier).state = 1;
 
-    // 等一帧让 UI 稳定后弹出设备选择器
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
-
-      final onlineDevices = ref.read(onlineDevicesProvider);
-      if (onlineDevices.isEmpty) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('暂无在线设备，请确保设备在同一网络')),
-          );
-        }
-        return;
-      }
 
       final navigator = _navigatorKey.currentState;
       if (navigator == null) return;
 
-      final device = await showModalBottomSheet<Device>(
+      final device = await showModalBottomSheet<Device?>(
         context: navigator.context,
-        builder: (ctx) => SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Padding(
-                padding: EdgeInsets.all(16),
-                child: Text('选择目标设备',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
-              ),
-              const Divider(height: 1),
-              ...onlineDevices.map((d) => ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor: d.platform == 'android'
-                          ? Colors.green.shade100
-                          : Colors.blue.shade100,
-                      child: Icon(
-                        d.platform == 'android'
-                            ? Icons.android
-                            : Icons.laptop,
-                        size: 22,
-                      ),
-                    ),
-                    title: Text(d.name),
-                    subtitle: Text(d.ip),
-                    onTap: () => Navigator.pop(ctx, d),
-                  )),
-              const SizedBox(height: 16),
-            ],
-          ),
-        ),
+        isDismissible: true,
+        enableDrag: true,
+        builder: (_) => _ShareDevicePicker(files: files),
       );
 
       if (device == null || !mounted) return;
@@ -519,5 +482,140 @@ class _CriticalBatteryDialogState extends State<_CriticalBatteryDialog> {
           ),
       ],
     );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 系统分享 → 设备选择器 (实时监听设备上线)
+// ═══════════════════════════════════════════════════════════════
+
+class _ShareDevicePicker extends ConsumerWidget {
+  final List<Map<String, dynamic>> files;
+  const _ShareDevicePicker({required this.files});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final onlineDevices = ref.watch(onlineDevicesProvider);
+
+    final fileInfo = _describeFiles(files);
+
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // 拖拽手柄
+            Container(
+              margin: const EdgeInsets.only(top: 8, bottom: 4),
+              width: 36, height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade400,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+              child: Row(
+                children: [
+                  const Icon(Icons.share, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      fileInfo,
+                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            if (onlineDevices.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 32),
+                child: Column(
+                  children: [
+                    const SizedBox(
+                      width: 32, height: 32,
+                      child: CircularProgressIndicator(strokeWidth: 2.5),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      '正在扫描局域网设备...',
+                      style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '确保设备在同一 Wi-Fi 网络',
+                      style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
+                    ),
+                  ],
+                ),
+              )
+            else
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                      child: Text(
+                        '选择目标设备 (${onlineDevices.length} 台在线)',
+                        style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                      ),
+                    ),
+                    ...onlineDevices.map((d) => ListTile(
+                          leading: CircleAvatar(
+                            radius: 18,
+                            backgroundColor: d.platform == 'android'
+                                ? Colors.green.shade100
+                                : Colors.blue.shade100,
+                            child: Icon(
+                              d.platform == 'android' ? Icons.android : Icons.laptop,
+                              size: 20,
+                              color: d.platform == 'android' ? Colors.green : Colors.blue,
+                            ),
+                          ),
+                          title: Text(d.name, style: const TextStyle(fontSize: 14)),
+                          subtitle: Text(d.ip, style: const TextStyle(fontSize: 12)),
+                          onTap: () => Navigator.pop(context, d),
+                        )),
+                    const SizedBox(height: 8),
+                    TextButton.icon(
+                      icon: const Icon(Icons.refresh, size: 16),
+                      label: const Text('刷新设备列表'),
+                      onPressed: () {
+                        ref.read(onlineDevicesProvider.notifier).refreshNow();
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: SizedBox(
+                width: double.infinity,
+                child: OutlinedButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('取消'),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _describeFiles(List<Map<String, dynamic>> files) {
+    if (files.isEmpty) return '发送文件';
+    final names = files.map((f) => f['name'] as String? ?? '').where((n) => n.isNotEmpty).toSet();
+    if (names.length == 1) return names.first;
+    final textFile = files.firstWhere(
+      (f) => (f['uri'] as String? ?? '').startsWith('data:text/plain,'),
+      orElse: () => <String, dynamic>{},
+    );
+    if (textFile.isNotEmpty) return '发送文本';
+    return '发送 ${files.length} 个文件';
   }
 }
