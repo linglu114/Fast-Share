@@ -820,17 +820,19 @@ class TransferSession {
     }
   }
 
-  /// 并发传输多个文件 (动态 worker-pool 模式)
+  /// 并发传输多个文件 — 信号量模型
   ///
-  /// 工作线程在每次取文件前检查并发数：若当前运行数超出目标，则优雅退出。
-  /// 周期性检查并发数变化，自动扩缩容。
+  /// 每个 slot 在取文件时检查是否超出当前并发配额。
+  /// - 降级：配额下调 → slot 传完当前文件后退出，不立即中断
+  /// - 扩容：配额上调 → 下一轮 _concurrencyChanged 回调触发补充
+  /// 无需定时器轮询，由 onConcurrencyChanged 回调驱动扩容。
   Future<void> _transferFilesConcurrent(List<FileEntry> files) async {
     final allFiles = List<FileEntry>.from(files);
     int nextIndex = 0;
-    int runningCount = 0;
+    final active = AtomicInt(0);
 
-    Future<void> worker() async {
-      runningCount++;
+    Future<void> slot() async {
+      active.inc();
       try {
         while (!_cancelled) {
           while (_paused && !_cancelled) {
@@ -838,10 +840,9 @@ class TransferSession {
           }
           if (_cancelled) return;
 
-          // 降级：当前运行数超出目标并发 → 本 worker 退出
-          if (runningCount > concurrentCount) return;
+          // 配额下调 → 本 slot 退出（传完当前文件后，不中断进行中的传输）
+          if (active.get() > concurrentCount) return;
 
-          // 无剩余文件
           if (nextIndex >= allFiles.length) return;
 
           final file = allFiles[nextIndex];
@@ -849,33 +850,36 @@ class TransferSession {
           await _transferSingleFile(file);
         }
       } finally {
-        runningCount--;
+        active.dec();
       }
     }
 
-    // 启动初始 worker pool
     final futures = <Future<void>>[];
+
+    // onConcurrencyChanged 在 DynamicConcurrency.adjust() 中被调用，
+    // 接管扩容逻辑 — 配额上调时补充新 slot
+    final origCallback = _concurrencyAdjuster?.onConcurrencyChanged;
+    if (_concurrencyAdjuster != null) {
+      _concurrencyAdjuster!.onConcurrencyChanged = (newCount) {
+        concurrentCount = newCount;
+        // 补充 slot 直到达到新配额或文件用完
+        while (active.get() < concurrentCount &&
+            nextIndex < allFiles.length &&
+            !_cancelled) {
+          futures.add(slot());
+        }
+        // 转发到原回调（日志 + UI 事件）
+        origCallback?.call(newCount);
+      };
+    }
+
+    // 启动初始 slot pool
     final initialCount = concurrentCount.clamp(1, allFiles.length);
     for (var i = 0; i < initialCount; i++) {
-      futures.add(worker());
+      futures.add(slot());
     }
 
-    // 伸缩定时器：检测并发数上调时补充 worker
-    Timer? scaleTimer;
-    scaleTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (_cancelled || nextIndex >= allFiles.length) {
-        timer.cancel();
-        return;
-      }
-      while (runningCount < concurrentCount &&
-          nextIndex < allFiles.length &&
-          !_cancelled) {
-        futures.add(worker());
-      }
-    });
-
     await Future.wait(futures);
-    scaleTimer?.cancel();
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -1392,6 +1396,16 @@ class TransferSession {
 // ═══════════════════════════════════════════════════════════
 // 辅助类型
 // ═══════════════════════════════════════════════════════════
+
+/// 单线程安全的整数计数器 — Dart Isolate 内所有 slot 运行在同一事件循环，
+/// 仅在 await 点让出控制权，无需真正的原子操作。
+class AtomicInt {
+  int _val;
+  AtomicInt(this._val);
+  int get() => _val;
+  void inc() { _val++; }
+  void dec() { _val--; }
+}
 
 class FileEntry {
   final String fileId;

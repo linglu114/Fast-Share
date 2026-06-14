@@ -169,11 +169,13 @@ class DynamicConcurrency {
   final int initialConcurrency;
   final int minConcurrency;
   final int maxConcurrency;
-  final Function(int) onConcurrencyChanged;
+  Function(int) onConcurrencyChanged;
 
   int _currentConcurrency;
   int _lastAdjustTime = 0;
   double _lastThroughput = 0;
+  int _upStreak = 0;   // 连续上升次数
+  int _downStreak = 0; // 连续下降次数
 
   DynamicConcurrency({
     required this.initialConcurrency,
@@ -186,8 +188,8 @@ class DynamicConcurrency {
 
   /// 根据性能指标调整并发数。
   ///
-  /// [uiFps] / [diskWriteLatencyMs] / [engineMemoryMB] 为可选指标，传 -1 表示跳过该检查。
-  /// 在 Engine Isolate 中通常只有 [currentThroughput] 可用。
+  /// Engine Isolate 中仅有 [currentThroughput] 可用，其余指标为 -1。
+  /// 使用滞回机制防止振荡：需要连续 2 次同向信号才调整。
   void adjust({
     required double currentThroughput,
     int diskWriteLatencyMs = -1,
@@ -200,60 +202,78 @@ class DynamicConcurrency {
     if (now - _lastAdjustTime < 5000) return;
     _lastAdjustTime = now;
 
-    bool changed = false;
-
-    // 严重卡顿：<15fps → 强制退回默认（仅 UI 端可用）
+    // 严重卡顿：立即退回初始值（仅 UI 端可用）
     if (uiFps >= 0 && uiFps < 15) {
+      _upStreak = 0; _downStreak = 0;
       if (_currentConcurrency > initialConcurrency) {
         _currentConcurrency = initialConcurrency;
-        changed = true;
+        onConcurrencyChanged(_currentConcurrency);
       }
-      if (changed) onConcurrencyChanged(_currentConcurrency);
       return;
     }
 
-    // UI 帧率 < 30fps → 降低并发
+    // UI FPS < 30 (仅 UI 端，无滞回)
     if (uiFps >= 0 && uiFps < 30 && _currentConcurrency > minConcurrency) {
+      _upStreak = 0; _downStreak = 0;
       _currentConcurrency--;
-      changed = true;
+      onConcurrencyChanged(_currentConcurrency);
+      _lastThroughput = currentThroughput;
+      return;
     }
 
-    // 磁盘写入延迟过高 (>100ms) → 降低并发
+    // 磁盘延迟过高 (仅 UI 端，无滞回)
     if (diskWriteLatencyMs >= 0 && diskWriteLatencyMs > 100 && _currentConcurrency > minConcurrency) {
+      _upStreak = 0; _downStreak = 0;
       _currentConcurrency--;
-      changed = true;
+      onConcurrencyChanged(_currentConcurrency);
+      _lastThroughput = currentThroughput;
+      return;
     }
 
-    // 引擎内存 > 80MB → 暂停新文件
-    if (engineMemoryMB >= 0 && engineMemoryMB > 80) {
-      if (_currentConcurrency > 0) {
-        _currentConcurrency = max(0, _currentConcurrency - 2);
-        changed = true;
+    // 内存 > 80MB (仅 UI 端，无滞回)
+    if (engineMemoryMB >= 0 && engineMemoryMB > 80 && _currentConcurrency > 0) {
+      _upStreak = 0; _downStreak = 0;
+      _currentConcurrency = max(0, _currentConcurrency - 2);
+      onConcurrencyChanged(_currentConcurrency);
+      _lastThroughput = currentThroughput;
+      return;
+    }
+
+    // ── 吞吐量趋势判断（含滞回） ──
+    bool raise = false;
+    bool lower = false;
+
+    if (_lastThroughput > 0) {
+      final ratio = currentThroughput / _lastThroughput;
+      if (ratio < 0.8) {
+        // 下降 > 20%
+        _downStreak++;
+        _upStreak = 0;
+        if (_downStreak >= 2) lower = true;
+      } else if (ratio >= 0.95 && _currentConcurrency < maxConcurrency) {
+        // 稳定或上升
+        _upStreak++;
+        _downStreak = 0;
+        if (_upStreak >= 2) raise = true;
+      } else {
+        // 中间地带 (0.8–0.95)：重置计数，不调整
+        _upStreak = 0;
+        _downStreak = 0;
       }
-    }
-
-    // 吞吐量下降 > 20% → 降低并发
-    if (_lastThroughput > 0 && currentThroughput < _lastThroughput * 0.8) {
-      if (_currentConcurrency > minConcurrency) {
-        _currentConcurrency--;
-        changed = true;
-      }
-    }
-
-    // 吞吐量良好 → 尝试增加并发
-    if (!changed &&
-        _lastThroughput > 0 &&
-        currentThroughput >= _lastThroughput * 0.95 &&
-        _currentConcurrency < maxConcurrency &&
-        (engineMemoryMB < 0 || engineMemoryMB < 50) &&
-        (diskWriteLatencyMs < 0 || diskWriteLatencyMs < 50)) {
-      _currentConcurrency++;
-      changed = true;
+    } else {
+      // 首次采样 — 尝试上调（如果低于 max）
+      if (_currentConcurrency < maxConcurrency) raise = true;
     }
 
     _lastThroughput = currentThroughput;
 
-    if (changed) {
+    if (lower && _currentConcurrency > minConcurrency) {
+      _currentConcurrency--;
+      _downStreak = 0;
+      onConcurrencyChanged(_currentConcurrency);
+    } else if (raise) {
+      _currentConcurrency++;
+      _upStreak = 0;
       onConcurrencyChanged(_currentConcurrency);
     }
   }
