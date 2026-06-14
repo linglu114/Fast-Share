@@ -154,37 +154,18 @@ class ReceiveEngine {
   }
 
   void _pause() {
-    // 暂停前 flush 所有待确认的 ACK，防止发送端因收不到确认而超时
-    _flushPendingAcks();
     _paused = true;
-    _ackTimer?.cancel();
-    _ackTimer = null;
+    // 保留 _ackTimer 继续发送 ACK，防止发送端因收不到确认而超时。
+    // 暂停期间 ACK 重复发送同一 ackOffset，发送端会因 ackOffset<=prevAcked 而忽略。
     _stopProgress();
-  }
-
-  /// Flush ACKs for all active files before pausing — prevents sender timeout
-  void _flushPendingAcks() {
-    for (final rf in _files.values) {
-      if (rf.bytesWritten > 0) {
-        final ackPayload = utf8.encode(jsonEncode({
-          'transferId': _transferId,
-          'fileId': rf.fileId,
-          'ackOffset': rf.bytesWritten,
-          'receivedRanges': [
-            [0, rf.bytesWritten]
-          ],
-        }));
-        final frame = FlpFrame(type: FlpMessageType.fileAck, payload: Uint8List.fromList(ackPayload));
-        _sendFrameToUi(frame);
-      }
-    }
-    _lastAckBytes = _totalBytesWritten;
   }
 
   void _resume() {
     _paused = false;
     _lastSpeedBytes = _totalBytesWritten;
-    _lastAckBytes = _totalBytesWritten; // 重置以便恢复后按新批次发送 ACK
+    _lastAckBytes = _totalBytesWritten;
+    // 恢复后立即发送一次 ACK，通知发送端当前进度（暂停期间可能漏了批次）
+    _sendAcksForAllActive();
     _startProgress();
   }
 
