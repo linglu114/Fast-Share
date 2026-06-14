@@ -165,6 +165,7 @@ class TransferNotifier extends Notifier<void> {
         relativePath: f['relativePath'] as String? ?? '',
         size: f['size'] as int? ?? 0,
       )).toList();
+      task.fileCount = task.files.length;
       return task.clone();
     });
   }
