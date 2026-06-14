@@ -182,6 +182,8 @@ class TransferSession {
   bool _cancelled = false;
   bool _completed = false;
   bool _socketClosed = false;
+  bool _pauseFramePending = false; // 在 chunk 间安全边界发送 TRANSFER_PAUSE
+  bool _resumeFramePending = false; // 在 chunk 间安全边界发送 TRANSFER_RESUME
 
   // Socket 监听（接收 ACK）
   Uint8List _frameBuffer = Uint8List(0);
@@ -345,17 +347,15 @@ class TransferSession {
 
   void pause() {
     _paused = true;
+    _pauseFramePending = true; // 由 chunk 循环在下一个安全边界发送
     _sendEvent('progress', _progressData());
-    // 不发送 TRANSFER_PAUSE 帧到 socket：pause() 在 chunk 循环的 await 点之间
-    // 执行，_sendFrame 写入的帧字节会与 FILE_DATA 二进制流交错，导致接收端
-    // 帧解析器在二进制载荷中读到控制帧 magic bytes，协议损坏 → socket RST。
-    // _paused 标志足以让循环在下一轮迭代停止，无需通知接收端。
   }
 
   void resume() {
     _paused = false;
+    _pauseFramePending = false;
+    _resumeFramePending = true; // 由 chunk 循环在下一个安全边界发送
     _sendEvent('progress', _progressData());
-    // 同上理由，不发送 TRANSFER_RESUME
   }
 
   void cancel() {
@@ -698,6 +698,16 @@ class TransferSession {
 
         if (i % 4 == 3 || i == totalChunks - 1) {
           await _socket?.flush();
+        }
+
+        // 在两个 chunk 之间的安全边界发送 TRANSFER_PAUSE，
+        // 此时 header+data+checksum 完整写入，不会与控制帧交织
+        if (_pauseFramePending && !_socketClosed) {
+          _pauseFramePending = false;
+          try {
+            final pauseFrame = TransferControlMessages.buildPause(transferId: transferId);
+            _socket?.add(pauseFrame.toBytes());
+          } catch (_) {}
         }
 
         // 每 10 chunk 输出一次计时分布

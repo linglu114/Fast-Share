@@ -155,6 +155,7 @@ class ReceiveEngine {
 
   void _pause() {
     _paused = true;
+    _sendEvent('transfer_paused', {'transferId': _transferId});
     // 保留 _ackTimer 继续发送 ACK，防止发送端因收不到确认而超时。
     // 暂停期间 ACK 重复发送同一 ackOffset，发送端会因 ackOffset<=prevAcked 而忽略。
     _stopProgress();
@@ -164,6 +165,7 @@ class ReceiveEngine {
     _paused = false;
     _lastSpeedBytes = _totalBytesWritten;
     _lastAckBytes = _totalBytesWritten;
+    _sendEvent('transfer_resumed', {'transferId': _transferId});
     // 恢复后立即发送一次 ACK，通知发送端当前进度（暂停期间可能漏了批次）
     _sendAcksForAllActive();
     _startProgress();

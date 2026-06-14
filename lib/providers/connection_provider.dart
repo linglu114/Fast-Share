@@ -266,6 +266,20 @@ class ConnectionNotifier extends Notifier<Map<String, bool>> {
     switch (type) {
       case 'transfer_started':
         break;
+      case 'transfer_paused':
+        ref.read(receiveTransferProvider.notifier).update((task) {
+          if (task == null) return null;
+          task.status = TransferStatus.paused;
+          return task.clone();
+        });
+        break;
+      case 'transfer_resumed':
+        ref.read(receiveTransferProvider.notifier).update((task) {
+          if (task == null) return null;
+          task.status = TransferStatus.transferring;
+          return task.clone();
+        });
+        break;
       case 'file_meta_received':
         // 更新接收任务的文件列表，确保 UI 实时显示
         final fileId = event['fileId'] as String?;
