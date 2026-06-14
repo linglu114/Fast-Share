@@ -266,12 +266,38 @@ class ConnectionNotifier extends Notifier<Map<String, bool>> {
       case 'transfer_started':
         break;
       case 'file_meta_received':
+        // 更新接收任务的文件列表，确保 UI 实时显示
+        final fileId = event['fileId'] as String?;
+        final relativePath = event['relativePath'] as String?;
+        final size = event['size'] as int?;
+        if (fileId != null && relativePath != null && size != null) {
+          ref.read(receiveTransferProvider.notifier).update((task) {
+            if (task == null) return null;
+            // 替换占位条目或追加新条目
+            final idx = task.files.indexWhere((f) => f.fileId == fileId);
+            if (idx >= 0) {
+              task.files[idx].size = size;
+              task.files[idx].relativePath = relativePath;
+            } else {
+              task.files.add(FileTransferItem(
+                fileId: fileId,
+                relativePath: relativePath,
+                size: size,
+              ));
+            }
+            return task.clone();
+          });
+        }
         break;
       case 'progress':
         ref.read(receiveTransferProvider.notifier).update((task) {
           if (task == null) return null;
           task.bytesTransferred = event['bytesWritten'] as int? ?? task.bytesTransferred;
-          task.totalSize = event['totalSize'] as int? ?? task.totalSize;
+          // 防止 _pendingSize 为 0 时覆盖 offer 中的正确 totalSize
+          final newTotal = event['totalSize'] as int?;
+          if (newTotal != null && newTotal > 0) {
+            task.totalSize = newTotal;
+          }
           task.avgSpeed = (event['speed'] as num?)?.toDouble() ?? task.avgSpeed;
           final peak = (event['peakSpeed'] as num?)?.toDouble() ?? 0;
           if (peak > task.peakSpeed) task.peakSpeed = peak;

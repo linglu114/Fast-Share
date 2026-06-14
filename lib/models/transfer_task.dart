@@ -25,8 +25,8 @@ enum TransferMode {
 /// 单个文件传输记录
 class FileTransferItem {
   final String fileId;
-  final String relativePath;
-  final int size;
+  String relativePath;
+  int size;
   final int mtime;
 
   int bytesTransferred;

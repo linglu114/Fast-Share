@@ -221,8 +221,14 @@ class TransferNotifier extends Notifier<void> {
 
     ref.read(activeTransferProvider.notifier).update((task) {
       if (task == null) return null;
-      task.bytesTransferred = data['bytesTransferred'] as int? ?? 0;
-      task.totalSize = data['totalSize'] as int? ?? task.totalSize;
+      final newBytes = data['bytesTransferred'] as int?;
+      if (newBytes != null && newBytes > 0) {
+        task.bytesTransferred = newBytes;
+      }
+      final newTotal = data['totalSize'] as int?;
+      if (newTotal != null && newTotal > 0) {
+        task.totalSize = newTotal;
+      }
       task.avgSpeed = (data['speed'] as num?)?.toDouble() ?? task.avgSpeed;
       final peak = (data['peakSpeed'] as num?)?.toDouble() ?? 0;
       if (peak > task.peakSpeed) task.peakSpeed = peak;
