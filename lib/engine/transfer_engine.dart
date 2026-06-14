@@ -425,7 +425,6 @@ class TransferSession {
       if (uri.isNotEmpty) {
         final id = _makeFileId(_files.length);
         if (fd != null && fd >= 0) {
-          // 直接通过 fd 读取，无需 Isolate 往返
           _files.add(FileEntry(
             fileId: id, absolutePath: '/proc/self/fd/$fd', relativePath: name,
             size: size, mtime: 0, contentUri: null,
@@ -445,6 +444,7 @@ class TransferSession {
       }
     }
 
+    String? _lastScanError;
     for (final path in paths) {
       if (_cancelled) break;
 
@@ -454,24 +454,36 @@ class TransferSession {
           await _scanDirectory(path, '');
         } else if (type == FileSystemEntityType.file) {
           _addFileEntry(path, p.basename(path), 0, 0);
+        } else {
+          _lastScanError = 'Unknown entity type: $path';
         }
       } catch (e) {
-        // skip inaccessible paths
+        _lastScanError = '$e';
+        Logger.log('[ENG] _scanFiles: failed to stat $path: $e');
       }
     }
 
+    if (_files.isEmpty && _lastScanError != null && contentFiles.isEmpty) {
+      _sendEvent('error', {
+        'transferId': transferId,
+        'message': '无法读取路径: $_lastScanError',
+      });
+    }
   }
 
   Future<void> _scanDirectory(String dirPath, String relativePrefix) async {
     try {
       final dir = Directory(dirPath);
+      if (!dir.existsSync()) {
+        Logger.log('[ENG] _scanDirectory: dir not found: $dirPath');
+        return;
+      }
       await for (final entity in dir.list(recursive: false)) {
         if (_cancelled) break;
 
         try {
           final name = p.basename(entity.path);
           final relPath = relativePrefix.isEmpty ? name : p.join(relativePrefix, name);
-          // Normalize to forward slashes for cross-platform compatibility (FLP v1.2)
           final normalizedRelPath = relPath.replaceAll('\\', '/');
 
           if (entity is File) {
@@ -479,12 +491,15 @@ class TransferSession {
           } else if (entity is Directory && folderMode) {
             await _scanDirectory(entity.path, relPath);
           }
-        } catch (_) {}
+        } catch (e) {
+          Logger.log('[ENG] _scanDirectory: skip entry ${entity.path}: $e');
+        }
       }
     } catch (e) {
+      Logger.log('[ENG] _scanDirectory: list failed for $dirPath: $e');
       _sendEvent('error', {
         'transferId': transferId,
-        'message': 'Directory scan failed: $dirPath — $e',
+        'message': '目录扫描失败: $dirPath — $e',
       });
     }
   }
