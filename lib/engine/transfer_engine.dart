@@ -346,17 +346,16 @@ class TransferSession {
   void pause() {
     _paused = true;
     _sendEvent('progress', _progressData());
-    try {
-      _sendFrame(TransferControlMessages.buildPause(transferId: transferId));
-    } catch (_) {}
+    // 不发送 TRANSFER_PAUSE 帧到 socket：pause() 在 chunk 循环的 await 点之间
+    // 执行，_sendFrame 写入的帧字节会与 FILE_DATA 二进制流交错，导致接收端
+    // 帧解析器在二进制载荷中读到控制帧 magic bytes，协议损坏 → socket RST。
+    // _paused 标志足以让循环在下一轮迭代停止，无需通知接收端。
   }
 
   void resume() {
     _paused = false;
     _sendEvent('progress', _progressData());
-    try {
-      _sendFrame(TransferControlMessages.buildResume(transferId: transferId));
-    } catch (_) {}
+    // 同上理由，不发送 TRANSFER_RESUME
   }
 
   void cancel() {
@@ -624,6 +623,9 @@ class TransferSession {
 
   /// 单文件顺序传输（零拷贝：header + raf.read() 直接写 socket，无 CRC32）
   Future<void> _transferSingleFile(FileEntry file) async {
+    // 防重入：socket 已关闭时跳过，避免在重试循环中反复等待 120s 超时
+    if (_socketClosed || _cancelled) return;
+
     final totalChunks = (file.size / chunkSize).ceil();
     final useContentUri = file.contentUri != null;
     Logger.log('[ENG] _transferSingleFile: fileId=${file.fileId} size=${file.size} chunks=$totalChunks contentUri=$useContentUri');
@@ -679,6 +681,11 @@ class TransferSession {
         _sendRawBytes(header);
         _sendRawBytes(data);
         _sendRawBytes(FlpFrame.zeroChecksum);
+
+        // 写入过程中 socket 可能已由错误回调关闭，此时立即终止避免
+        // 继续累计 _bytesTransferred 并进入无限重试循环
+        if (_cancelled || _socketClosed) break;
+
         final tSend1 = DateTime.now().microsecondsSinceEpoch;
         sendUs += tSend1 - tSend0;
 
@@ -703,6 +710,10 @@ class TransferSession {
 
       final totalUs = DateTime.now().microsecondsSinceEpoch - t0;
       Logger.log('[ENG] all chunks sent in ${(totalUs / 1000).toStringAsFixed(0)}ms, waiting for FILE_COMPLETE from receiver');
+
+      // socket 已死（发送过程中被错误回调关闭）→ 直接返回，不白白等 120s
+      if (_socketClosed || _cancelled) return;
+
       // 等待接收端 FILE_COMPLETE 确认（超时 120s，给慢速磁盘足够时间）
       final ackCompleter = Completer<void>();
       _ackWaiters[file.fileId] = ackCompleter;
