@@ -184,6 +184,7 @@ class TransferSession {
   bool _socketClosed = false;
   bool _pauseFramePending = false; // 在 chunk 间安全边界发送 TRANSFER_PAUSE
   bool _resumeFramePending = false; // 在 chunk 间安全边界发送 TRANSFER_RESUME
+  bool _cancelling = false; // 防止 cancel() 重入
 
   // Socket 监听（接收 ACK）
   Uint8List _frameBuffer = Uint8List(0);
@@ -359,6 +360,8 @@ class TransferSession {
   }
 
   void cancel() {
+    if (_cancelling) return;
+    _cancelling = true;
     _cancelled = true;
     _progressTimer?.cancel();
     _stopHeartbeat();
@@ -378,10 +381,10 @@ class TransferSession {
     if (_acceptReceived != null && !_acceptReceived!.isCompleted) {
       _acceptReceived!.complete();
     }
-    // Notify receiver (skip if _sendFrame already set this)
+    // 尝试通知接收端传输取消（直接写 socket，绕过 _sendRawBytes 的 _cancelling 守卫）
     if (!_socketClosed) {
       try {
-        _sendCancel();
+        _sendCancelDirect();
       } catch (_) {}
     }
     _socketClosed = true;
@@ -674,7 +677,7 @@ class TransferSession {
           _resumeFramePending = false;
           try {
             final resumeFrame = TransferControlMessages.buildResume(transferId: transferId);
-            _socket?.add(resumeFrame.toBytes());
+            _sendRawBytes(resumeFrame.toBytes());
           } catch (_) {}
         }
 
@@ -731,7 +734,7 @@ class TransferSession {
           _pauseFramePending = false;
           try {
             final pauseFrame = TransferControlMessages.buildPause(transferId: transferId);
-            _socket?.add(pauseFrame.toBytes());
+            _sendRawBytes(pauseFrame.toBytes());
           } catch (_) {}
         }
 
@@ -755,7 +758,7 @@ class TransferSession {
         _resumeFramePending = false;
         try {
           final resumeFrame = TransferControlMessages.buildResume(transferId: transferId);
-          _socket?.add(resumeFrame.toBytes());
+          _sendRawBytes(resumeFrame.toBytes());
         } catch (_) {}
       }
 
@@ -1036,6 +1039,17 @@ class TransferSession {
     _sendFrame(FlpFrame(type: FlpMessageType.transferCancel, payload: payload));
   }
 
+  /// 直接写 socket 发送 TRANSFER_CANCEL，绕过 _sendRawBytes 的守卫。
+  /// 仅在 cancel() 内部调用，用于在 socket 可能已受损时做最后一次通知尝试。
+  void _sendCancelDirect() {
+    final payload = Uint8List.fromList(utf8.encode(jsonEncode({
+      'transferId': transferId,
+      'reason': 'TRANSFER_FAILED',
+    })));
+    final frame = FlpFrame(type: FlpMessageType.transferCancel, payload: payload);
+    _socket?.add(frame.toBytes());
+  }
+
   void _sendTransferOffer() {
     final fileSummaries = _files.map((f) => {
       'fileId': f.fileId,
@@ -1216,17 +1230,16 @@ class TransferSession {
   }
 
   void _sendRawBytes(Uint8List bytes) {
-    if (_socketClosed) return;
+    if (_socketClosed || _cancelling) return;
     try {
       _socket?.add(bytes);
     } catch (e) {
-      _socketClosed = true;
       Logger.log('[ENG] _sendRawBytes FAILED: len=${bytes.length} error=$e');
       _sendEvent('error', {
         'transferId': transferId,
         'message': 'Socket write failed: $e',
       });
-      cancel();
+      cancel(); // 不在此设置 _socketClosed，让 cancel() 先尝试发送 TRANSFER_CANCEL
     }
   }
 
