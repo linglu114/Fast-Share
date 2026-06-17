@@ -119,12 +119,16 @@ object ContentUriHelper {
 
         return try {
             val uri = Uri.parse(uriStr)
-            val pfd = context.contentResolver.openFileDescriptor(uri, "r") ?: return -1
+            val pfd = context.contentResolver.openFileDescriptor(uri, "r") ?: run {
+                android.util.Log.w("FastShare", "openContentFd: openFileDescriptor returned null for $uriStr")
+                return -1
+            }
             openPfds[uriStr] = pfd
-            // 同时打开 FileChannel 作为备用回退
             openChannels[uriStr] = FileInputStream(pfd.fileDescriptor).channel
+            android.util.Log.d("FastShare", "openContentFd: opened fd=${pfd.fd} for $uriStr")
             pfd.fd
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            android.util.Log.e("FastShare", "openContentFd FAILED for $uriStr: ${e.javaClass.simpleName}: ${e.message}", e)
             -1
         }
     }
@@ -181,10 +185,18 @@ object ContentUriHelper {
     /// and recursively collects every file under the tree as content-file maps.
     /// Returns empty list when user cancels or an error occurs.
     fun parseFolderPickResult(context: Context, data: Intent?): List<Map<String, Any?>> {
-        if (data == null) return emptyList()
+        if (data == null) {
+            android.util.Log.d("FastShare", "parseFolderPickResult: data is null (user cancelled)")
+            return emptyList()
+        }
 
-        val treeUri = data.data ?: return emptyList()
+        val treeUri = data.data
+        if (treeUri == null) {
+            android.util.Log.w("FastShare", "parseFolderPickResult: data.data is null")
+            return emptyList()
+        }
 
+        android.util.Log.d("FastShare", "parseFolderPickResult: treeUri=$treeUri")
         // Persist permission across reboots
         try {
             context.contentResolver.takePersistableUriPermission(

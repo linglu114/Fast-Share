@@ -347,6 +347,7 @@ class TransferSession {
 
   void pause() {
     _paused = true;
+    _cancelConcurrencyTimer(); // 暂停期间不调整并发数
     Logger.log('[ENG] PAUSED transferId=$transferId');
     // 立即发送 PAUSE 到 socket — 单次 _sendRawBytes 不与 chunk 数据交织
     if (!_socketClosed) {
@@ -361,6 +362,7 @@ class TransferSession {
 
   void resume() {
     _paused = false;
+    _startConcurrencyMonitor(); // 恢复后重新评估并发数
     Logger.log('[ENG] RESUMED transferId=$transferId');
     _resumeFramePending = true;
     if (!_socketClosed) {
@@ -790,8 +792,9 @@ class TransferSession {
 
       while (!timedOut && !_cancelled && !ackCompleter.isCompleted) {
         await Future.delayed(const Duration(milliseconds: _pollMs));
+        // 暂停时跳过所有检查：不计时、不处理 FILE_COMPLETE，防止恢复前意外推进
+        if (_paused) continue;
         if (ackCompleter.isCompleted) break;
-        if (_paused) continue;              // 暂停不计时
         _remainingMs -= _pollMs;
         if (_remainingMs <= 0) {
           timedOut = true;
@@ -1336,9 +1339,13 @@ class TransferSession {
     });
   }
 
-  void _stopConcurrencyMonitor() {
+  void _cancelConcurrencyTimer() {
     _concurrencyTimer?.cancel();
     _concurrencyTimer = null;
+  }
+
+  void _stopConcurrencyMonitor() {
+    _cancelConcurrencyTimer();
     _concurrencyAdjuster = null;
   }
 
