@@ -3,6 +3,7 @@ package com.fastshare.fastshare
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Environment
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
@@ -117,28 +118,78 @@ object ContentUriHelper {
 
     /// 打开 content URI 并返回文件描述符编号，用于 Engine Isolate 直读。
     /// PFD 引用保存在 openPfds 中防止 GC 关闭底层 fd。
-    /// 返回 -1 表示打开失败。
+    /// 返回 -1 表示打开失败（回退到 readChunk 路径）。
     fun openContentFd(context: Context, uriStr: String): Int {
         openPfds[uriStr]?.let { return it.fd }
-        return try {
-            val uri = Uri.parse(uriStr)
-            val pfd = context.contentResolver.openFileDescriptor(uri, "r")
-            if (pfd == null) {
-                android.util.Log.e("FastShare", "openFileDescriptor null for $uriStr")
-                return -1
+
+        val uri = Uri.parse(uriStr)
+
+        // Strategy 1: direct openFileDescriptor on the given URI
+        val fd = tryOpenFileDescriptor(context, uri)
+        if (fd >= 0) return fd
+
+        // Strategy 2: if the URI is a document URI, extract the document ID
+        // and try to find the real filesystem path to open via FileInputStream.
+        // On Android 15, DownloadsProvider document URIs are not covered by
+        // tree permission grants, but the files themselves are readable at
+        // the filesystem level if we know their real path.
+        val docId = extractDocumentId(uri)
+        if (docId != null) {
+            // Try to resolve _data column from the document URI
+            val realPath = tryResolveRealPath(context, uri)
+            if (realPath != null) {
+                return tryOpenRealFile(uriStr, realPath)
             }
-            openPfds[uriStr] = pfd
-            openChannels[uriStr] = FileInputStream(pfd.fileDescriptor).channel
-            android.util.Log.e("FastShare", "openContentFd: fd=${pfd.fd}")
+        }
+
+        // Strategy 3: fallback to openInputStream
+        if (openStream(context, uriStr)) return -1
+
+        return -1
+    }
+
+    private fun tryOpenRealFile(uriStr: String, realPath: String): Int {
+        return try {
+            val file = File(realPath)
+            if (!file.canRead()) return -1
+            val fis = FileInputStream(file)
+            openPfds[uriStr] = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+            openChannels[uriStr] = fis.channel
+            val pfd = openPfds[uriStr]!!
+            android.util.Log.e("FastShare", "openContentFd OK (real file): fd=${pfd.fd} path=$realPath")
             pfd.fd
-        } catch (e: SecurityException) {
-            android.util.Log.e("FastShare", "openContentFd SecurityException, will fallback to stream: ${e.message}")
-            openStream(context, uriStr)
-            -1
         } catch (e: Exception) {
-            android.util.Log.e("FastShare", "openContentFd FAILED: ${e.javaClass.simpleName}: ${e.message}")
+            android.util.Log.e("FastShare", "openRealFile FAILED: ${e.message}")
             -1
         }
+    }
+
+    /// Returns fd on success, -1 on any failure. Does NOT cache — caller caches.
+    private fun tryOpenFileDescriptor(context: Context, uri: Uri): Int {
+        return try {
+            val pfd = context.contentResolver.openFileDescriptor(uri, "r")
+            if (pfd == null) {
+                android.util.Log.e("FastShare", "openFileDescriptor null for $uri")
+                return -1
+            }
+            openPfds[uri.toString()] = pfd
+            openChannels[uri.toString()] = FileInputStream(pfd.fileDescriptor).channel
+            android.util.Log.e("FastShare", "openContentFd OK: fd=${pfd.fd} uri=$uri")
+            pfd.fd
+        } catch (e: SecurityException) {
+            android.util.Log.e("FastShare", "openFileDescriptor SecurityException for $uri: ${e.message}")
+            -1
+        } catch (e: Exception) {
+            android.util.Log.e("FastShare", "openFileDescriptor FAILED for $uri: ${e.javaClass.simpleName}: ${e.message}")
+            -1
+        }
+    }
+
+    /// Extract the raw document ID from a content:// URI's last path segment.
+    /// e.g. content://.../document/msf%3A1000010965 → "msf:1000010965"
+    private fun extractDocumentId(uri: Uri): String? {
+        val last = uri.lastPathSegment ?: return null
+        return Uri.decode(last)
     }
 
     private fun openStream(context: Context, uriStr: String): Boolean {
@@ -152,7 +203,7 @@ object ContentUriHelper {
                 true
             } else { false }
         } catch (e: Exception) {
-            android.util.Log.e("FastShare", "openStream FAILED: ${e.message}")
+            android.util.Log.e("FastShare", "openStream FAILED for $uriStr: ${e.message}")
             false
         }
     }
@@ -220,6 +271,16 @@ object ContentUriHelper {
     // DocumentFile.isDirectory/isFile throws SecurityException on
     // Android 15 when the app lacks descendant-level permission
     // (which is always the case under scoped storage).
+    //
+    // Reading strategy:
+    // On Android 15, the DownloadsProvider rejects openFileDescriptor
+    // on document URIs built from the tree (both buildDocumentUri
+    // and buildDocumentUriUsingTree variants). To work around this,
+    // we resolve the real filesystem path for every file by
+    // reconstructing it from the tree structure:
+    //   /storage/emulated/0/Download/<folderName>/<relativePath>
+    // When the real path is readable, the Flutter engine bypasses
+    // SAF entirely and reads via dart:io File API.
     // ═══════════════════════════════════════════════════════════
 
     private val PROJECTION = arrayOf(
@@ -282,7 +343,16 @@ object ContentUriHelper {
         val prefix = if (baseName.isNotEmpty()) "$baseName/" else ""
         android.util.Log.e("FastShare", "parseFolderPickResult: baseName='$baseName' prefix='$prefix'")
 
-        val files = traverseTree(context, treeUri, rootDocId, prefix)
+        // Resolve the real filesystem root for the selected folder.
+        // On Android the Downloads directory maps to the public Download folder.
+        // Constructing the real path lets us bypass SAF entirely for reading —
+        // on Android 15 the DownloadsProvider refuses openFileDescriptor on
+        // document URIs, but direct filesystem access works when the path is known.
+        val downloadsRoot = Environment.getExternalStoragePublicDirectory(
+            Environment.DIRECTORY_DOWNLOADS).absolutePath
+        android.util.Log.e("FastShare", "parseFolderPickResult: downloadsRoot=$downloadsRoot")
+
+        val files = traverseTree(context, treeUri, rootDocId, prefix, downloadsRoot)
 
         android.util.Log.e("FastShare", "parseFolderPickResult: found ${files.size} files total")
         return files
@@ -292,7 +362,8 @@ object ContentUriHelper {
         context: Context,
         treeUri: Uri,
         parentDocId: String,
-        prefix: String
+        prefix: String,
+        downloadsRoot: String
     ): List<Map<String, Any?>> {
         val result = mutableListOf<Map<String, Any?>>()
         val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
@@ -318,25 +389,27 @@ object ContentUriHelper {
                     val isDir = DocumentsContract.Document.MIME_TYPE_DIR == mime
 
                     if (isDir) {
-                        result.addAll(traverseTree(context, treeUri, docId, "$prefix$name/"))
+                        result.addAll(traverseTree(
+                            context, treeUri, docId, "$prefix$name/", downloadsRoot))
                     } else {
-                        // Use buildDocumentUriUsingTree to ensure the URI is within
-                        // the tree permission scope. On Android 15, buildDocumentUri
-                        // (authority-only) produces a URI not covered by the tree grant,
-                        // causing SecurityException on openFileDescriptor / openInputStream.
-                        val fileUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
-                        // Take persistable permission on individual file URI:
-                        // on Android 15, tree-level permission may not cover
-                        // document URIs built outside the /tree/ prefix
-                        try {
-                            context.contentResolver.takePersistableUriPermission(
-                                fileUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        } catch (_: Exception) {}
+                        val authority = treeUri.authority ?: continue
+                        val fileUri = DocumentsContract.buildDocumentUri(authority, docId)
+
+                        // Resolve the real filesystem path:
+                        // 1. Try _data column from the document URI (works for some files)
+                        // 2. Construct from tree structure: <downloadsRoot>/<prefix><name>
+                        //    e.g. /storage/emulated/0/Download/QQ/StarRail_4.3.0.apk
+                        val relativePath = "$prefix$name"
+                        val realPath = tryResolveRealPath(context, fileUri)
+                            ?: "$downloadsRoot/$relativePath".let { candidate ->
+                                if (File(candidate).canRead()) candidate else null
+                            }
+
                         result.add(mapOf(
                             "uri" to fileUri.toString(),
-                            "name" to "$prefix$name",
+                            "name" to relativePath,
                             "size" to size,
-                            "realPath" to null,
+                            "realPath" to realPath,
                         ))
                     }
                 } catch (e: Exception) {
