@@ -120,16 +120,20 @@ object ContentUriHelper {
 
         return try {
             val uri = Uri.parse(uriStr)
-            val pfd = context.contentResolver.openFileDescriptor(uri, "r") ?: run {
-                android.util.Log.w("FastShare", "openContentFd: openFileDescriptor returned null for $uriStr")
+            val pfd = context.contentResolver.openFileDescriptor(uri, "r")
+            if (pfd == null) {
+                android.util.Log.e("FastShare", "openFileDescriptor null for $uriStr")
                 return -1
             }
             openPfds[uriStr] = pfd
             openChannels[uriStr] = FileInputStream(pfd.fileDescriptor).channel
-            android.util.Log.d("FastShare", "openContentFd: opened fd=${pfd.fd} for $uriStr")
+            android.util.Log.e("FastShare", "openContentFd: fd=${pfd.fd} uri=$uriStr")
             pfd.fd
+        } catch (e: SecurityException) {
+            android.util.Log.e("FastShare", "openContentFd SecurityException (will use readChunk): ${e.message}")
+            -1
         } catch (e: Exception) {
-            android.util.Log.e("FastShare", "openContentFd FAILED for $uriStr: ${e.javaClass.simpleName}: ${e.message}", e)
+            android.util.Log.e("FastShare", "openContentFd FAILED: ${e.javaClass.simpleName}: ${e.message}")
             -1
         }
     }
@@ -138,32 +142,47 @@ object ContentUriHelper {
     /// Keeps ParcelFileDescriptor + FileChannel open across calls to eliminate
     /// the O(n²) skip overhead of per-chunk open→skip→read→close.
     fun readChunk(context: Context, uriStr: String, offset: Int, length: Int): ByteArray? {
+        // 优先 FileChannel (O(1) seek)
+        val channel = openChannels[uriStr]
+        if (channel != null) {
+            return try {
+                channel.position(offset.toLong())
+                val buf = ByteBuffer.allocate(length)
+                var total = 0
+                while (total < length) {
+                    val n = channel.read(buf)
+                    if (n < 0) break
+                    total += n
+                }
+                if (total > 0) { buf.flip(); ByteArray(total).also { buf.get(it) } }
+                else ByteArray(0)
+            } catch (_: Exception) { null }
+        }
+        // fd 不可用 → InputStream fallback (O(n) skip, Android 15 兼容)
         return try {
-            val channel = openChannels.getOrPut(uriStr) {
-                val uri = Uri.parse(uriStr)
-                val pfd = context.contentResolver.openFileDescriptor(uri, "r")
-                    ?: return null
-                // 必须保持 PFD 引用防止 GC finalize() 关闭底层 fd
-                openPfds[uriStr] = pfd
-                FileInputStream(pfd.fileDescriptor).channel
+            val uri = Uri.parse(uriStr)
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                // 手动 skip（兼容所有 API）
+                var skipped = 0L
+                val skipBuf = ByteArray(8192)
+                while (skipped < offset) {
+                    val toSkip = minOf(skipBuf.size.toLong(), offset - skipped)
+                    val n = input.read(skipBuf, 0, toSkip.toInt())
+                    if (n < 0) break
+                    skipped += n
+                }
+                val buf = ByteArray(length)
+                var total = 0
+                while (total < length) {
+                    val n = input.read(buf, total, length - total)
+                    if (n < 0) break
+                    total += n
+                }
+                if (total > 0) { if (total == length) buf else buf.copyOf(total) }
+                else ByteArray(0)
             }
-            channel.position(offset.toLong())
-            val buf = ByteBuffer.allocate(length)
-            var total = 0
-            while (total < length) {
-                val n = channel.read(buf)
-                if (n < 0) break
-                total += n
-            }
-            if (total > 0) {
-                buf.flip()
-                val result = ByteArray(total)
-                buf.get(result)
-                result
-            } else {
-                ByteArray(0)
-            }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            android.util.Log.e("FastShare", "readChunk FAILED for $uriStr: ${e.message}")
             null
         }
     }
@@ -290,7 +309,15 @@ object ContentUriHelper {
                     if (isDir) {
                         result.addAll(traverseTree(context, treeUri, docId, "$prefix$name/"))
                     } else {
-                        val fileUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
+                        val authority = treeUri.authority ?: return result
+                        val fileUri = DocumentsContract.buildDocumentUri(authority, docId)
+                        // Take persistable permission on individual file URI:
+                        // on Android 15, tree-level permission may not cover
+                        // document URIs built outside the /tree/ prefix
+                        try {
+                            context.contentResolver.takePersistableUriPermission(
+                                fileUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        } catch (_: Exception) {}
                         result.add(mapOf(
                             "uri" to fileUri.toString(),
                             "name" to "$prefix$name",
