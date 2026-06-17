@@ -1,11 +1,13 @@
 package com.fastshare.fastshare
 
+import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Environment
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
+import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.database.Cursor
 import java.io.File
@@ -114,6 +116,28 @@ object ContentUriHelper {
             }
         } catch (_: Exception) {}
         return null
+    }
+
+    /// Query MediaStore.Files by numeric ID extracted from a document ID.
+    /// On Android 15 the DownloadsProvider returns docIds like "msf:1000010965"
+    /// where the numeric part is the MediaStore _id. The SAF _data column on
+    /// the document URI is null, but MediaStore.Files still has the DATA column.
+    private fun resolveRealPathFromMediaStore(context: Context, docId: String): String? {
+        val numericId = docId.substringAfterLast(":").toLongOrNull()
+            ?: return null
+        if (numericId <= 0) return null
+        return try {
+            val uri = ContentUris.withAppendedId(
+                MediaStore.Files.getContentUri("external"), numericId)
+            context.contentResolver.query(
+                uri, arrayOf(MediaStore.Files.FileColumns.DATA), null, null, null
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val path = cursor.getString(0)
+                    if (path != null && File(path).canRead()) path else null
+                } else null
+            }
+        } catch (_: Exception) { null }
     }
 
     /// 打开 content URI 并返回文件描述符编号，用于 Engine Isolate 直读。
@@ -403,10 +427,12 @@ object ContentUriHelper {
                         val dataReal = tryResolveRealPath(context, fileUri)
                         val candidateFs = "$downloadsRoot/$relativePath"
                         val fsReadable = File(candidateFs).canRead()
+                        val mediaReal = resolveRealPathFromMediaStore(context, docId)
                         val realPath = dataReal
                             ?: if (fsReadable) candidateFs else null
+                            ?: mediaReal
 
-                        android.util.Log.e("FastShare", "FILE uri=${fileUri} name=$relativePath size=$size _data=$dataReal fsCandidate=$candidateFs fsReadable=$fsReadable => realPath=$realPath")
+                        android.util.Log.e("FastShare", "FILE name=$relativePath size=$size _data=$dataReal fs=$candidateFs(fsR=$fsReadable) media=$mediaReal => realPath=$realPath")
 
                         result.add(mapOf(
                             "uri" to fileUri.toString(),
