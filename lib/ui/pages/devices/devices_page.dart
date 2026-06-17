@@ -470,7 +470,15 @@ class _DevicesPageState extends ConsumerState<DevicesPage>
       if (ContentUriReader.isSupported) {
         // Android: SAF tree picker avoids filesystem permission issues
         final contentFiles = await ContentUriReader.pickFolder();
-        if (contentFiles.isEmpty) return;
+        if (contentFiles == null) return; // user cancelled
+        if (contentFiles.isEmpty) {
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('所选文件夹为空或无法读取，请检查权限')),
+            );
+          }
+          return;
+        }
         await _startTransferToDevice(ref, device, [], true,
             contentFiles: contentFiles);
       } else {

@@ -186,7 +186,8 @@ class MainActivity : FlutterActivity() {
             if (resultCode == Activity.RESULT_OK) {
                 result.success(ContentUriHelper.parseFolderPickResult(applicationContext, data))
             } else {
-                result.success(emptyList<Map<String, Any?>>())
+                // User cancelled — return null so Dart can distinguish cancel from error
+                result.success(null)
             }
         }
     }

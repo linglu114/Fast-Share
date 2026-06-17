@@ -206,7 +206,7 @@ object ContentUriHelper {
         } catch (_: Exception) {}
 
         val rootDoc = DocumentFile.fromTreeUri(context, treeUri) ?: run {
-            android.util.Log.w("ContentUriHelper", "fromTreeUri returned null for $treeUri")
+            android.util.Log.w("FastShare", "fromTreeUri returned null for $treeUri")
             return emptyList()
         }
 
@@ -214,38 +214,47 @@ object ContentUriHelper {
         // creates files under SavePath/SelectedFolder/... instead of flat in SavePath.
         val baseName = rootDoc.name ?: ""
         val prefix = if (baseName.isNotEmpty()) "$baseName/" else ""
-        return traverseTree(context, rootDoc, prefix)
+        val files = traverseTree(context, rootDoc, prefix)
+        android.util.Log.d("FastShare", "parseFolderPickResult: found ${files.size} files in prefix='$prefix'")
+        return files
     }
 
-    /// Recursively traverse [parent], collecting file entries into a flat list.
-    /// Each entry follows the same shape as pickFiles results:
-    ///   { uri, name (relative path within tree), size, realPath (null for SAF) }
     private fun traverseTree(
         context: Context,
         parent: DocumentFile,
         prefix: String
     ): List<Map<String, Any?>> {
         val result = mutableListOf<Map<String, Any?>>()
+        val parentUri = parent.uri
         val children = try {
             parent.listFiles()
         } catch (e: Exception) {
-            android.util.Log.w("ContentUriHelper", "listFiles failed for ${parent.uri}: $e")
+            android.util.Log.w("FastShare", "listFiles failed for $parentUri: ${e.javaClass.simpleName}: ${e.message}")
             return result
         }
 
-        if (children == null) return result
+        if (children == null) {
+            android.util.Log.w("FastShare", "listFiles returned null for $parentUri")
+            return result
+        }
 
         for (child in children) {
             try {
-                if (child.isDirectory) {
+                val childUri = child.uri
+                // On Android 15+, isDirectory/isFile may throw SecurityException
+                // if the app lacks permission on a specific descendant
+                val isDir = try { child.isDirectory } catch (_: Exception) { false }
+                val isFile = try { child.isFile } catch (_: Exception) { false }
+
+                if (isDir) {
                     val subPrefix = if (prefix.isEmpty()) "${child.name}/" else "$prefix${child.name}/"
                     result.addAll(traverseTree(context, child, subPrefix))
-                } else if (child.isFile) {
+                } else if (isFile) {
                     var size = 0L
                     try { size = child.length() } catch (_: Exception) {}
 
                     result.add(mapOf(
-                        "uri" to child.uri.toString(),
+                        "uri" to childUri.toString(),
                         "name" to "$prefix${child.name}",
                         "size" to size,
                         "realPath" to null,
@@ -253,7 +262,7 @@ object ContentUriHelper {
                 }
                 // skip other types (virtual containers, etc.)
             } catch (e: Exception) {
-                android.util.Log.w("ContentUriHelper", "Skipping child in traverseTree: $e")
+                android.util.Log.w("FastShare", "Skipping child in traverseTree: ${e.javaClass.simpleName}: ${e.message}")
             }
         }
 

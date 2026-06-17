@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/services.dart';
+import '../util/logger.dart';
 
 /// Content URI 操作 — Android 端通过 MethodChannel 调用原生 ContentUriHelper
 class ContentUriReader {
@@ -24,17 +25,24 @@ class ContentUriReader {
 
   /// 打开系统文件夹选择器 (ACTION_OPEN_DOCUMENT_TREE)，递归遍历所有文件，
   /// 返回 content-file 格式的列表。每项含 uri, name (树内相对路径), size, realPath。
-  /// 取消或出错返回空列表。
-  static Future<List<Map<String, dynamic>>> pickFolder() async {
-    if (!isSupported) return [];
+  /// 返回 null 表示用户取消，返回空列表表示选中了空文件夹或发生错误。
+  static Future<List<Map<String, dynamic>>?> pickFolder() async {
+    if (!isSupported) return null;
     try {
       final result = await _channel.invokeMethod('pickFolder');
+      if (result == null) {
+        Logger.log('[CUR] pickFolder: user cancelled');
+        return null; // 用户取消
+      }
       if (result is List) {
+        Logger.log('[CUR] pickFolder: got ${result.length} files');
         return result.map((e) => Map<String, dynamic>.from(e as Map)).toList();
       }
     } on MissingPluginException {
       // plugin not registered on this platform
-    } catch (_) {}
+    } catch (e) {
+      Logger.log('[CUR] pickFolder FAILED: $e');
+    }
     return [];
   }
 
