@@ -18,6 +18,10 @@ object ContentUriHelper {
     private val openPfds = LinkedHashMap<String, ParcelFileDescriptor>()
     // 持久 FileChannel，支持 O(1) seek (lseek64)，消除 O(n²) skip 开销
     private val openChannels = LinkedHashMap<String, FileChannel>()
+    // Android 15 上 openFileDescriptor 可能因 SecurityException 失败，
+    // 使用持久 InputStream + 跟踪位置作为回退 (O(1) 相对 skip)
+    private val openStreams = LinkedHashMap<String, java.io.InputStream>()
+    private val streamPositions = LinkedHashMap<String, Long>()
 
     fun parsePickResult(context: Context, data: Intent): List<Map<String, Any?>> {
         val files = mutableListOf<Map<String, Any?>>()
@@ -115,9 +119,7 @@ object ContentUriHelper {
     /// PFD 引用保存在 openPfds 中防止 GC 关闭底层 fd。
     /// 返回 -1 表示打开失败。
     fun openContentFd(context: Context, uriStr: String): Int {
-        // 已打开的 URI 直接返回现有 fd
         openPfds[uriStr]?.let { return it.fd }
-
         return try {
             val uri = Uri.parse(uriStr)
             val pfd = context.contentResolver.openFileDescriptor(uri, "r")
@@ -127,10 +129,11 @@ object ContentUriHelper {
             }
             openPfds[uriStr] = pfd
             openChannels[uriStr] = FileInputStream(pfd.fileDescriptor).channel
-            android.util.Log.e("FastShare", "openContentFd: fd=${pfd.fd} uri=$uriStr")
+            android.util.Log.e("FastShare", "openContentFd: fd=${pfd.fd}")
             pfd.fd
         } catch (e: SecurityException) {
-            android.util.Log.e("FastShare", "openContentFd SecurityException (will use readChunk): ${e.message}")
+            android.util.Log.e("FastShare", "openContentFd SecurityException, will fallback to stream: ${e.message}")
+            openStream(context, uriStr)
             -1
         } catch (e: Exception) {
             android.util.Log.e("FastShare", "openContentFd FAILED: ${e.javaClass.simpleName}: ${e.message}")
@@ -138,67 +141,75 @@ object ContentUriHelper {
         }
     }
 
-    /// Chunk read with O(1) seek via FileChannel.position() (lseek64).
-    /// Keeps ParcelFileDescriptor + FileChannel open across calls to eliminate
-    /// the O(n²) skip overhead of per-chunk open→skip→read→close.
+    private fun openStream(context: Context, uriStr: String): Boolean {
+        if (openStreams.containsKey(uriStr)) return true
+        return try {
+            val uri = Uri.parse(uriStr)
+            val s = context.contentResolver.openInputStream(uri)
+            if (s != null) {
+                openStreams[uriStr] = s
+                streamPositions[uriStr] = 0L
+                true
+            } else { false }
+        } catch (e: Exception) {
+            android.util.Log.e("FastShare", "openStream FAILED: ${e.message}")
+            false
+        }
+    }
+
     fun readChunk(context: Context, uriStr: String, offset: Int, length: Int): ByteArray? {
-        // 优先 FileChannel (O(1) seek)
         val channel = openChannels[uriStr]
         if (channel != null) {
             return try {
                 channel.position(offset.toLong())
                 val buf = ByteBuffer.allocate(length)
                 var total = 0
-                while (total < length) {
-                    val n = channel.read(buf)
-                    if (n < 0) break
-                    total += n
-                }
-                if (total > 0) { buf.flip(); ByteArray(total).also { buf.get(it) } }
-                else ByteArray(0)
+                while (total < length) { val n = channel.read(buf); if (n < 0) break; total += n }
+                if (total > 0) { buf.flip(); ByteArray(total).also { buf.get(it) } } else ByteArray(0)
             } catch (_: Exception) { null }
         }
-        // fd 不可用 → InputStream fallback (O(n) skip, Android 15 兼容)
-        return try {
-            val uri = Uri.parse(uriStr)
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                // 手动 skip（兼容所有 API）
-                var skipped = 0L
-                val skipBuf = ByteArray(8192)
-                while (skipped < offset) {
-                    val toSkip = minOf(skipBuf.size.toLong(), offset - skipped)
-                    val n = input.read(skipBuf, 0, toSkip.toInt())
-                    if (n < 0) break
-                    skipped += n
+        val cachedStream = openStreams[uriStr]
+        if (cachedStream != null) {
+            return try {
+                val curPos = streamPositions[uriStr] ?: 0L
+                val target = offset.toLong()
+                if (target > curPos) {
+                    var skipped = 0L
+                    val skipBuf = ByteArray(8192)
+                    while (skipped < target - curPos) {
+                        val n = cachedStream.read(skipBuf, 0, minOf(skipBuf.size.toLong(), target - curPos - skipped).toInt())
+                        if (n < 0) break; skipped += n
+                    }
+                } else if (target < curPos) {
+                    try { cachedStream.close() } catch (_: Exception) {}
+                    openStreams.remove(uriStr); streamPositions.remove(uriStr)
+                    return readChunk(context, uriStr, offset, length)
                 }
-                val buf = ByteArray(length)
-                var total = 0
-                while (total < length) {
-                    val n = input.read(buf, total, length - total)
-                    if (n < 0) break
-                    total += n
-                }
-                if (total > 0) { if (total == length) buf else buf.copyOf(total) }
-                else ByteArray(0)
-            }
-        } catch (e: Exception) {
-            android.util.Log.e("FastShare", "readChunk FAILED for $uriStr: ${e.message}")
-            null
+                val buf = ByteArray(length); var total = 0
+                while (total < length) { val n = cachedStream.read(buf, total, length - total); if (n < 0) break; total += n }
+                streamPositions[uriStr] = target + total
+                if (total > 0) { if (total == length) buf else buf.copyOf(total) } else ByteArray(0)
+            } catch (e: Exception) { android.util.Log.e("FastShare", "stream readChunk FAILED: ${e.message}"); null }
         }
+        if (openStream(context, uriStr)) return readChunk(context, uriStr, offset, length)
+        return null
     }
 
-    /// 关闭指定 URI 的持久 channel 和 PFD
     fun closeContentStream(uriStr: String) {
         openChannels.remove(uriStr)?.close()
         try { openPfds.remove(uriStr)?.close() } catch (_: Exception) {}
+        try { openStreams.remove(uriStr)?.close() } catch (_: Exception) {}
+        streamPositions.remove(uriStr)
     }
 
-    /// 关闭所有持久 channel 和 PFD
     fun closeAllContentStreams() {
         for ((_, ch) in openChannels) { try { ch.close() } catch (_: Exception) {} }
         openChannels.clear()
         for ((_, pfd) in openPfds) { try { pfd.close() } catch (_: Exception) {} }
         openPfds.clear()
+        for ((_, s) in openStreams) { try { s.close() } catch (_: Exception) {} }
+        openStreams.clear()
+        streamPositions.clear()
     }
 
     // ═══════════════════════════════════════════════════════════
