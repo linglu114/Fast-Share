@@ -4,12 +4,13 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.ParcelFileDescriptor
+import android.provider.DocumentsContract
 import android.provider.OpenableColumns
+import android.database.Cursor
 import java.io.File
 import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
-import androidx.documentfile.provider.DocumentFile
 
 object ContentUriHelper {
 
@@ -181,89 +182,130 @@ object ContentUriHelper {
         openPfds.clear()
     }
 
+    // ═══════════════════════════════════════════════════════════
+    // Folder picker — DocumentsContract-based tree traversal
+    //
+    // Uses DocumentsContract.buildChildDocumentsUriUsingTree() +
+    // ContentResolver.query() instead of DocumentFile because
+    // DocumentFile.isDirectory/isFile throws SecurityException on
+    // Android 15 when the app lacks descendant-level permission
+    // (which is always the case under scoped storage).
+    // ═══════════════════════════════════════════════════════════
+
+    private val PROJECTION = arrayOf(
+        DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+        DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+        DocumentsContract.Document.COLUMN_MIME_TYPE,
+        DocumentsContract.Document.COLUMN_SIZE,
+    )
+
     /// Opens ACTION_OPEN_DOCUMENT_TREE result, takes persistable permission,
     /// and recursively collects every file under the tree as content-file maps.
     /// Returns empty list when user cancels or an error occurs.
     fun parseFolderPickResult(context: Context, data: Intent?): List<Map<String, Any?>> {
         if (data == null) {
-            android.util.Log.d("FastShare", "parseFolderPickResult: data is null (user cancelled)")
+            android.util.Log.e("FastShare", "parseFolderPickResult: data is null")
             return emptyList()
         }
 
         val treeUri = data.data
         if (treeUri == null) {
-            android.util.Log.w("FastShare", "parseFolderPickResult: data.data is null")
+            android.util.Log.e("FastShare", "parseFolderPickResult: data.data is null")
             return emptyList()
         }
 
-        android.util.Log.d("FastShare", "parseFolderPickResult: treeUri=$treeUri")
+        android.util.Log.e("FastShare", "parseFolderPickResult: treeUri=$treeUri")
+
         // Persist permission across reboots
         try {
             context.contentResolver.takePersistableUriPermission(
                 treeUri,
                 Intent.FLAG_GRANT_READ_URI_PERMISSION
             )
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            android.util.Log.e("FastShare", "takePersistableUriPermission FAILED: ${e.message}")
+        }
 
-        val rootDoc = DocumentFile.fromTreeUri(context, treeUri) ?: run {
-            android.util.Log.w("FastShare", "fromTreeUri returned null for $treeUri")
+        // Extract root document ID from tree URI
+        val rootDocId = try {
+            DocumentsContract.getTreeDocumentId(treeUri)
+        } catch (e: Exception) {
+            android.util.Log.e("FastShare", "getTreeDocumentId FAILED: ${e.message}")
             return emptyList()
         }
 
-        // Include the selected folder name as the base prefix so the receiver
-        // creates files under SavePath/SelectedFolder/... instead of flat in SavePath.
-        val baseName = rootDoc.name ?: ""
+        android.util.Log.e("FastShare", "parseFolderPickResult: rootDocId=$rootDocId")
+
+        // Get root document to extract folder name
+        val rootDocUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, rootDocId)
+        var baseName = ""
+        try {
+            context.contentResolver.query(rootDocUri, PROJECTION, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    baseName = cursor.getString(1) ?: ""
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("FastShare", "root doc query FAILED: ${e.message}")
+        }
+
         val prefix = if (baseName.isNotEmpty()) "$baseName/" else ""
-        val files = traverseTree(context, rootDoc, prefix)
-        android.util.Log.d("FastShare", "parseFolderPickResult: found ${files.size} files in prefix='$prefix'")
+        android.util.Log.e("FastShare", "parseFolderPickResult: baseName='$baseName' prefix='$prefix'")
+
+        val files = traverseTree(context, treeUri, rootDocId, prefix)
+
+        android.util.Log.e("FastShare", "parseFolderPickResult: found ${files.size} files total")
         return files
     }
 
     private fun traverseTree(
         context: Context,
-        parent: DocumentFile,
+        treeUri: Uri,
+        parentDocId: String,
         prefix: String
     ): List<Map<String, Any?>> {
         val result = mutableListOf<Map<String, Any?>>()
-        val parentUri = parent.uri
-        val children = try {
-            parent.listFiles()
-        } catch (e: Exception) {
-            android.util.Log.w("FastShare", "listFiles failed for $parentUri: ${e.javaClass.simpleName}: ${e.message}")
-            return result
-        }
+        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
+        var cursor: Cursor? = null
 
-        if (children == null) {
-            android.util.Log.w("FastShare", "listFiles returned null for $parentUri")
-            return result
-        }
-
-        for (child in children) {
-            try {
-                val childUri = child.uri
-                // On Android 15+, isDirectory/isFile may throw SecurityException
-                // if the app lacks permission on a specific descendant
-                val isDir = try { child.isDirectory } catch (_: Exception) { false }
-                val isFile = try { child.isFile } catch (_: Exception) { false }
-
-                if (isDir) {
-                    val subPrefix = if (prefix.isEmpty()) "${child.name}/" else "$prefix${child.name}/"
-                    result.addAll(traverseTree(context, child, subPrefix))
-                } else if (isFile) {
-                    var size = 0L
-                    try { size = child.length() } catch (_: Exception) {}
-
-                    result.add(mapOf(
-                        "uri" to childUri.toString(),
-                        "name" to "$prefix${child.name}",
-                        "size" to size,
-                        "realPath" to null,
-                    ))
-                }
-                // skip other types (virtual containers, etc.)
-            } catch (e: Exception) {
-                android.util.Log.w("FastShare", "Skipping child in traverseTree: ${e.javaClass.simpleName}: ${e.message}")
+        try {
+            cursor = context.contentResolver.query(
+                childrenUri, PROJECTION, null, null, null
+            )
+            if (cursor == null) {
+                android.util.Log.e("FastShare", "traverseTree: query null for docId=$parentDocId")
+                return result
             }
+
+            while (cursor.moveToNext()) {
+                try {
+                    val docId = cursor.getString(0)
+                    val name = cursor.getString(1)
+                    val mime = cursor.getString(2)
+                    val size = if (cursor.isNull(3)) 0L else cursor.getLong(3)
+
+                    if (docId == null || name == null) continue
+                    val isDir = DocumentsContract.Document.MIME_TYPE_DIR == mime
+
+                    if (isDir) {
+                        result.addAll(traverseTree(context, treeUri, docId, "$prefix$name/"))
+                    } else {
+                        val fileUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
+                        result.add(mapOf(
+                            "uri" to fileUri.toString(),
+                            "name" to "$prefix$name",
+                            "size" to size,
+                            "realPath" to null,
+                        ))
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("FastShare", "traverseTree skip: ${e.javaClass.simpleName}: ${e.message}")
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("FastShare", "traverseTree query FAILED for $parentDocId: ${e.javaClass.simpleName}: ${e.message}", e)
+        } finally {
+            cursor?.close()
         }
 
         return result
