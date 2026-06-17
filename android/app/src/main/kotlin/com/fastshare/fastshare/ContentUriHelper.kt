@@ -320,8 +320,11 @@ object ContentUriHelper {
                     if (isDir) {
                         result.addAll(traverseTree(context, treeUri, docId, "$prefix$name/"))
                     } else {
-                        val authority = treeUri.authority ?: return result
-                        val fileUri = DocumentsContract.buildDocumentUri(authority, docId)
+                        // Use buildDocumentUriUsingTree to ensure the URI is within
+                        // the tree permission scope. On Android 15, buildDocumentUri
+                        // (authority-only) produces a URI not covered by the tree grant,
+                        // causing SecurityException on openFileDescriptor / openInputStream.
+                        val fileUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
                         // Take persistable permission on individual file URI:
                         // on Android 15, tree-level permission may not cover
                         // document URIs built outside the /tree/ prefix
