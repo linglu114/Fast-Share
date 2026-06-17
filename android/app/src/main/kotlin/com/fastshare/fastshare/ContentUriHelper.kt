@@ -400,10 +400,13 @@ object ContentUriHelper {
                         // 2. Construct from tree structure: <downloadsRoot>/<prefix><name>
                         //    e.g. /storage/emulated/0/Download/QQ/StarRail_4.3.0.apk
                         val relativePath = "$prefix$name"
-                        val realPath = tryResolveRealPath(context, fileUri)
-                            ?: "$downloadsRoot/$relativePath".let { candidate ->
-                                if (File(candidate).canRead()) candidate else null
-                            }
+                        val dataReal = tryResolveRealPath(context, fileUri)
+                        val candidateFs = "$downloadsRoot/$relativePath"
+                        val fsReadable = File(candidateFs).canRead()
+                        val realPath = dataReal
+                            ?: if (fsReadable) candidateFs else null
+
+                        android.util.Log.e("FastShare", "FILE uri=${fileUri} name=$relativePath size=$size _data=$dataReal fsCandidate=$candidateFs fsReadable=$fsReadable => realPath=$realPath")
 
                         result.add(mapOf(
                             "uri" to fileUri.toString(),
