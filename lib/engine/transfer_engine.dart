@@ -347,8 +347,8 @@ class TransferSession {
 
   void pause() {
     _paused = true;
-    // 立即发送 PAUSE 到 socket（单次 _sendRawBytes 不与 chunk 数据交织），
-    // 接收端暂停期间缓冲后到的 chunk 数据，不会丢失
+    Logger.log('[ENG] PAUSED transferId=$transferId');
+    // 立即发送 PAUSE 到 socket — 单次 _sendRawBytes 不与 chunk 数据交织
     if (!_socketClosed) {
       try {
         final pauseFrame = TransferControlMessages.buildPause(transferId: transferId);
@@ -356,11 +356,12 @@ class TransferSession {
       } catch (_) {}
     }
     _sendEvent('progress', _progressData());
+    _sendEvent('transfer_paused', {'transferId': transferId});
   }
 
   void resume() {
     _paused = false;
-    // 立即发送 RESUME；chunk 循环中仍保留 _resumeFramePending 作为安全补充
+    Logger.log('[ENG] RESUMED transferId=$transferId');
     _resumeFramePending = true;
     if (!_socketClosed) {
       try {
@@ -370,6 +371,7 @@ class TransferSession {
       } catch (_) {}
     }
     _sendEvent('progress', _progressData());
+    _sendEvent('transfer_resumed', {'transferId': transferId});
   }
 
   void cancel() {
@@ -676,7 +678,8 @@ class TransferSession {
     final t0 = DateTime.now().microsecondsSinceEpoch;
 
     try {
-      for (var i = 0; i < totalChunks; i++) {
+      var i = 0;
+      while (i < totalChunks) {
         if (_cancelled) {
           Logger.log('[ENG] chunk loop cancelled at i=$i/$totalChunks');
           break;
@@ -702,10 +705,10 @@ class TransferSession {
         if (_tokenBucket != null) {
           await _tokenBucket!.consume(currentChunkSize);
         }
-        // 限速等待后可能已暂停，立即检查以避免继续发送
+        // 限速等待后可能已暂停，立即检查；while 循环 i 不变，恢复后重试同一 chunk
         if (_paused && !_cancelled) continue;
 
-        // 读文件（定位读写，确保暂停后重读同一 offset）
+        // 读文件（定位读写，暂停后重试同一 offset 不丢数据）
         final tRead0 = DateTime.now().microsecondsSinceEpoch;
         final Uint8List data;
         if (useContentUri) {
@@ -718,13 +721,10 @@ class TransferSession {
         final tRead1 = DateTime.now().microsecondsSinceEpoch;
         readUs += tRead1 - tRead0;
 
-        // 读文件耗时长（最多 8MB），可能在读期间收到 PAUSE 指令，
-        // 立即回跳循环顶部等待恢复，不发送已读数据，避免延时暂停。
-        // 恢复后从同一 offset 重新读，不丢数据。
+        // raf.read() 期间可能收到 PAUSE，立即回跳；i 不变 + setPositionSync 确保重读正确
         if (_paused && !_cancelled) continue;
 
-        // 单次 socket.add() 发送完整 DATA 帧 (header + data + 4B zeroChecksum)，
-        // 避免三次独立 add() + flush() 在 Android 原生层触发 StreamSink 内部状态冲突
+        // 单次 socket.add() 发送完整 DATA 帧
         final tSend0 = DateTime.now().microsecondsSinceEpoch;
         final header = FlpFrame.buildFileDataHeader(
           transferId: transferId,
@@ -742,8 +742,7 @@ class TransferSession {
           _sendRawBytes(frame);
         }
 
-        // 写入过程中 socket 可能已由错误回调关闭，此时立即终止避免
-        // 继续累计 _bytesTransferred 并进入无限重试循环
+        // 写入过程中 socket 可能已由错误回调关闭，此时立即终止
         if (_cancelled || _socketClosed) break;
 
         final tSend1 = DateTime.now().microsecondsSinceEpoch;
@@ -752,14 +751,15 @@ class TransferSession {
         _bytesTransferred += currentChunkSize;
         file.bytesTransferred += currentChunkSize;
         offset += currentChunkSize;
+        i++; // 仅在成功发送后递增 chunk 索引
 
         _updateSpeed();
         _notifyProgress();
 
         // 每 10 chunk 输出一次计时分布
-        if (i % 10 == 9 || i == totalChunks - 1) {
-          final n = (i % 10) + 1;
-          Logger.log('[ENG] chunk[$i]: read=${(readUs / n).toStringAsFixed(0)}us send=${(sendUs / n).toStringAsFixed(0)}us perChunkAvg');
+        if (i % 10 == 0 || i == totalChunks) {
+          final n = i % 10 == 0 ? 10 : i % 10;
+          Logger.log('[ENG] chunk[${i - 1}]: read=${(readUs / n).toStringAsFixed(0)}us send=${(sendUs / n).toStringAsFixed(0)}us perChunkAvg');
           readUs = 0; sendUs = 0;
         }
       }
@@ -780,18 +780,24 @@ class TransferSession {
         } catch (_) {}
       }
 
-      // 等待接收端 FILE_COMPLETE 确认（超时 120s，给慢速磁盘足够时间）
+      // 等待接收端 FILE_COMPLETE 确认（超时 120s，给慢速磁盘足够时间）。
+      // 使用轮询循环以支持暂停：暂停期间不消耗超时配额、不提前返回。
       final ackCompleter = Completer<void>();
       _ackWaiters[file.fileId] = ackCompleter;
       bool timedOut = false;
+      const _pollMs = 500;
+      var _remainingMs = 120000; // 120 s
 
-      await ackCompleter.future.timeout(
-        const Duration(seconds: 120),
-        onTimeout: () {
+      while (!timedOut && !_cancelled && !ackCompleter.isCompleted) {
+        await Future.delayed(const Duration(milliseconds: _pollMs));
+        if (ackCompleter.isCompleted) break;
+        if (_paused) continue;              // 暂停不计时
+        _remainingMs -= _pollMs;
+        if (_remainingMs <= 0) {
           timedOut = true;
           _ackWaiters.remove(file.fileId);
-        },
-      );
+        }
+      }
 
       if (timedOut) {
         Logger.log('[ENG] FILE_COMPLETE timeout! retries=${file.retries}/$retryCount');

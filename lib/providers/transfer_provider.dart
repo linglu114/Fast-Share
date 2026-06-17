@@ -119,6 +119,12 @@ class TransferNotifier extends Notifier<void> {
     switch (type) {
       case 'engine_ready':
         break;
+      case 'transfer_paused':
+        _onPauseEvent(data, true);
+        break;
+      case 'transfer_resumed':
+        _onPauseEvent(data, false);
+        break;
       case 'file_list_chunk':
         _onFileListChunk(data);
         break;
@@ -147,6 +153,19 @@ class TransferNotifier extends Notifier<void> {
         _onConcurrencyChanged(data);
         break;
     }
+  }
+
+  void _onPauseEvent(Map<String, dynamic> data, bool paused) {
+    final transferId = data['transferId'] as String?;
+    if (transferId == null) return;
+    final active = ref.read(activeTransferProvider);
+    if (active?.transferId != transferId) return;
+
+    ref.read(activeTransferProvider.notifier).update((task) {
+      if (task == null) return null;
+      task.status = paused ? TransferStatus.paused : TransferStatus.transferring;
+      return task.clone();
+    });
   }
 
   void _onFileListChunk(Map<String, dynamic> data) {
