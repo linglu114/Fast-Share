@@ -152,21 +152,40 @@ object ContentUriHelper {
         val fd = tryOpenFileDescriptor(context, uri)
         if (fd >= 0) return fd
 
-        // Strategy 2: if the URI is a document URI, extract the document ID
-        // and try to find the real filesystem path to open via FileInputStream.
-        // On Android 15, DownloadsProvider document URIs are not covered by
-        // tree permission grants, but the files themselves are readable at
-        // the filesystem level if we know their real path.
+        // Strategy 2: extract document ID → try real filesystem path
         val docId = extractDocumentId(uri)
         if (docId != null) {
-            // Try to resolve _data column from the document URI
             val realPath = tryResolveRealPath(context, uri)
+                ?: resolveRealPathFromMediaStore(context, docId)
             if (realPath != null) {
                 return tryOpenRealFile(uriStr, realPath)
             }
+
+            // Strategy 3: Downloads content provider bypass.
+            // On Android 15 the DownloadsProvider rejects SAF document URIs even
+            // with tree permission. Try content://downloads/... using the numeric
+            // part of the document ID (e.g. msf:1000010965 → 1000010965).
+            val numericId = docId.substringAfterLast(":").toLongOrNull()
+            if (numericId != null && numericId > 0) {
+                for (base in arrayOf("content://downloads/my_downloads",
+                                     "content://downloads/all_downloads")) {
+                    val dlUri = Uri.parse("$base/$numericId")
+                    val dlFd = tryOpenFileDescriptor(context, dlUri)
+                    if (dlFd >= 0) {
+                        // Remap to original uriStr for readChunk lookup
+                        val pfd = openPfds.remove(dlUri.toString())
+                        val ch = openChannels.remove(dlUri.toString())
+                        if (pfd != null && ch != null) {
+                            openPfds[uriStr] = pfd
+                            openChannels[uriStr] = ch
+                            return pfd.fd
+                        }
+                    }
+                }
+            }
         }
 
-        // Strategy 3: fallback to openInputStream
+        // Strategy 4: fallback to openInputStream
         if (openStream(context, uriStr)) return -1
 
         return -1
