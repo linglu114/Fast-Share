@@ -345,6 +345,14 @@ class ReceiveEngine {
       'relativePath': relativePath,
       'size': size,
     });
+
+    // 空文件（size=0）不会有 FILE_DATA 帧，发送端也已跳过 chunk 循环。
+    // 必须在此处直接触发完成，否则发送端一直等 FILE_COMPLETE（120s 超时）
+    // 导致 transfer 卡在"传输中"状态。
+    if (size == 0) {
+      Logger.log('[RECV] handleFileMeta: empty file detected, completing immediately fileId=$fileId');
+      _onFileComplete(fileId);
+    }
   }
 
   // ═══════════════════════════════════════════════════════════
