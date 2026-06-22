@@ -349,7 +349,6 @@ class TransferSession {
     _paused = true;
     _cancelConcurrencyTimer(); // 暂停期间不调整并发数
     Logger.log('[ENG] PAUSED transferId=$transferId');
-    print('[PAUSE-TRACE] _paused=true ${DateTime.now().millisecondsSinceEpoch}');
     // 立即发送 PAUSE 到 socket — 单次 _sendRawBytes 不与 chunk 数据交织
     if (!_socketClosed) {
       try {
@@ -708,10 +707,7 @@ class TransferSession {
         // 导致暂停后至少多传一个 chunk。
         await Future.delayed(Duration.zero);
         if (_cancelled) break;
-        if (_paused) {
-          print('[PAUSE-TRACE] loop-yield detected pause before chunk i=$i ts=${DateTime.now().millisecondsSinceEpoch}');
-          continue; // 重新进入 while(_paused) 等待
-        }
+        if (_paused) { continue; }
 
         // 恢复后立即在安全边界发送 TRANSFER_RESUME：此时刚退出 while(_paused)，
         // 无 FILE_DATA 正在写入 socket，不会与控制帧交织
@@ -779,11 +775,7 @@ class TransferSession {
         }
 
         // 写入过程中 socket 可能已由错误回调关闭，此时立即终止
-        if (_cancelled || _socketClosed) {
-          print('[PAUSE-TRACE] chunk send aborted i=$i cancelled=$_cancelled socketClosed=$_socketClosed');
-          break;
-        }
-        print('[PAUSE-TRACE] chunk SENT i=$i offset=$offset len=$currentChunkSize ts=${DateTime.now().millisecondsSinceEpoch}');
+        if (_cancelled || _socketClosed) break;
 
         final tSend1 = DateTime.now().microsecondsSinceEpoch;
         sendUs += tSend1 - tSend0;
@@ -1325,10 +1317,7 @@ class TransferSession {
   /// 当前操作（已暂停 / socket 已关闭 / 正在取消）。
   bool _sendRawBytes(Uint8List bytes, {bool allowWhenPaused = true}) {
     if (_socketClosed || _cancelling) return false;
-    if (!allowWhenPaused && _paused) {
-      print('[PAUSE-TRACE] _sendRawBytes BLOCKED by _paused len=${bytes.length} ts=${DateTime.now().millisecondsSinceEpoch}');
-      return false;
-    }
+    if (!allowWhenPaused && _paused) return false;
     try {
       _socket?.add(bytes);
       return true;
