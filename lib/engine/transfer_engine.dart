@@ -662,6 +662,15 @@ class TransferSession {
     // 防重入：socket 已关闭时跳过，避免在重试循环中反复等待 120s 超时
     if (_socketClosed || _cancelled) return;
 
+    // 暂停检查必须在 FILE_META 发送之前：
+    // 并发 slot 在进入本函数前会检查 _paused，但 pause() 可能在
+    // 检查通过后、sendFrame(FILE_META) 前被调用。此处兜底确保
+    // 不会在有暂停标记的情况下继续发送文件元数据和新 chunk。
+    while (_paused && !_cancelled) {
+      await Future.delayed(const Duration(milliseconds: 100));
+    }
+    if (_cancelled) return;
+
     final totalChunks = (file.size / chunkSize).ceil();
     final useContentUri = file.contentUri != null;
     Logger.log('[ENG] _transferSingleFile: fileId=${file.fileId} size=${file.size} chunks=$totalChunks contentUri=$useContentUri');
