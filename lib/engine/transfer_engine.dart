@@ -765,7 +765,12 @@ class TransferSession {
           frame.setAll(0, header);
           frame.setAll(header.length, data);
           frame.setAll(header.length + data.length, zc);
-          _sendRawBytes(frame);
+          if (!_sendRawBytes(frame, allowWhenPaused: false)) {
+            // 暂停时 _sendRawBytes 返回 false，不回退 offset/i，
+            // 恢复后重读同一 chunk 重新发送。
+            if (_paused) continue;
+            break; // socket closed or cancelling
+          }
         }
 
         // 写入过程中 socket 可能已由错误回调关闭，此时立即终止
@@ -1305,18 +1310,25 @@ class TransferSession {
     _sendRawBytes(frame.toBytes());
   }
 
-  void _sendRawBytes(Uint8List bytes) {
-    if (_socketClosed || _cancelling) return;
+  /// 写字节到 socket。控制帧始终放行；数据帧可通过 [allowWhenPaused] 阻止。
+  ///
+  /// 返回 `true` 表示字节已成功写入 socket，返回 `false` 表示调用方应放弃
+  /// 当前操作（已暂停 / socket 已关闭 / 正在取消）。
+  bool _sendRawBytes(Uint8List bytes, {bool allowWhenPaused = true}) {
+    if (_socketClosed || _cancelling) return false;
+    if (!allowWhenPaused && _paused) return false;
     try {
       _socket?.add(bytes);
+      return true;
     } catch (e) {
       Logger.log('[ENG] _sendRawBytes FAILED: len=${bytes.length} error=$e');
-      Logger.flushSync(); // 立即落盘，防止后续 cancel() 丢失日志
+      Logger.flushSync();
       _sendEvent('error', {
         'transferId': transferId,
         'message': 'Socket write failed: $e',
       });
-      cancel(); // 不在此设置 _socketClosed，让 cancel() 先尝试发送 TRANSFER_CANCEL
+      cancel();
+      return false;
     }
   }
 
