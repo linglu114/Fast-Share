@@ -786,6 +786,12 @@ class TransferSession {
       // 使用轮询循环以支持暂停：暂停期间不消耗超时配额、不提前返回。
       final ackCompleter = Completer<void>();
       _ackWaiters[file.fileId] = ackCompleter;
+      // 0 字节文件 / 竞态修复：FILE_COMPLETE 可能在 raf.open() 或 chunk
+      // 发送期间已到达（接收端处理 0 字节文件极快），此时 _fileCompleted
+      // 已标记但 waiter 未注册。检查到后立即完成，跳过 120s 等待。
+      if (_fileCompleted[file.fileId] == true && !ackCompleter.isCompleted) {
+        ackCompleter.complete();
+      }
       bool timedOut = false;
       const _pollMs = 500;
       var _remainingMs = 120000; // 120 s
@@ -795,6 +801,12 @@ class TransferSession {
         // 暂停时跳过所有检查：不计时、不处理 FILE_COMPLETE，防止恢复前意外推进
         if (_paused) continue;
         if (ackCompleter.isCompleted) break;
+        // 防御性检查：FILE_COMPLETE 可能在任意 await 点到达
+        if (_fileCompleted[file.fileId] == true) {
+          ackCompleter.complete();
+          _ackWaiters.remove(file.fileId);
+          break;
+        }
         _remainingMs -= _pollMs;
         if (_remainingMs <= 0) {
           timedOut = true;
