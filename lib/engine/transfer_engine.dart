@@ -742,12 +742,13 @@ class TransferSession {
         final tRead1 = DateTime.now().microsecondsSinceEpoch;
         readUs += tRead1 - tRead0;
 
-        // raf.read() 期间可能收到 PAUSE，立即回跳；i 不变 + setPositionSync 确保重读正确
-        if (_paused && !_cancelled) continue;
-
-        // 发送前最终检查 — 兜底保护，防止 frame 构建期间排队事件被处理
-        // （belt-and-suspenders，与顶部 yield+recheck 配合）
-        if (_paused && !_cancelled) continue;
+        // raf.read() / _requestChunk() 完成后，async 函数以微任务恢复。
+        // Dart 事件循环先消费完整个微任务队列才处理下一事件，因此队列
+        // 中排队的 pause 命令在此刻仍未被消费，_paused 为 false。
+        // 必须 _sendRawBytes 前 yield 让出事件循环，否则至少多传 1 chunk。
+        await Future.delayed(Duration.zero);
+        if (_cancelled) break;
+        if (_paused) continue; // 重新进入 while(_paused)
 
         // 单次 socket.add() 发送完整 DATA 帧
         final tSend0 = DateTime.now().microsecondsSinceEpoch;
