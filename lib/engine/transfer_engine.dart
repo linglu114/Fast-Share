@@ -627,7 +627,12 @@ class TransferSession {
         while (_paused && !_cancelled) {
           await Future.delayed(const Duration(milliseconds: 100));
         }
+        if (_cancelled) break;
         await _transferSingleFile(file);
+        // 文件传输完成后检查暂停：防止暂停期间 FILE_COMPLETE 竞态导致连续发送
+        while (_paused && !_cancelled) {
+          await Future.delayed(const Duration(milliseconds: 100));
+        }
       }
     }
 
@@ -829,7 +834,21 @@ class TransferSession {
       while (!timedOut && !_cancelled && !ackCompleter.isCompleted) {
         await Future.delayed(const Duration(milliseconds: _pollMs));
         // 暂停时跳过所有检查：不计时、不处理 FILE_COMPLETE，防止恢复前意外推进
-        if (_paused) continue;
+        if (_paused) {
+          // 暂停期间持续等待，直到恢复或取消。
+          // 注意：socket 监听器仍在运行，FILE_COMPLETE 可能在暂停期间到达
+          // 并通过 _onFileCompleteReceived 完成 ackCompleter。
+          while (_paused && !_cancelled) {
+            await Future.delayed(const Duration(milliseconds: 100));
+          }
+          if (_cancelled) break;
+          // 恢复后：如果 FILE_COMPLETE 已在暂停期间到达，跳出等待循环
+          if (ackCompleter.isCompleted) break;
+          // 未收到 FILE_COMPLETE → 重新注册 waiter，等待恢复后接收端重发
+          _ackWaiters[file.fileId] = ackCompleter;
+          _remainingMs = 120000; // 重置超时
+          continue;
+        }
         if (ackCompleter.isCompleted) break;
         // 防御性检查：FILE_COMPLETE 可能在任意 await 点到达
         if (_fileCompleted[file.fileId] == true) {
@@ -843,6 +862,30 @@ class TransferSession {
           _ackWaiters.remove(file.fileId);
         }
       }
+
+      // 暂停期间 FILE_COMPLETE 已到达：文件确实已成功传输，接受完成。
+      // 不能丢弃——接收端已写入磁盘并发送了确认，重发会导致重复数据。
+      if (_paused && !_cancelled && ackCompleter.isCompleted && _fileCompleted[file.fileId] == true) {
+        Logger.log('[ENG] FILE_COMPLETE arrived during pause for fileId=${file.fileId}, accepting');
+        file.status = FileStatus.completed;
+        _sendEvent('file_complete', {
+          'transferId': transferId,
+          'fileId': file.fileId,
+          'success': true,
+        });
+        // 等待恢复后再处理下一个文件
+        while (_paused && !_cancelled) {
+          await Future.delayed(const Duration(milliseconds: 100));
+        }
+        raf?.close();
+        return;
+      }
+
+      // 暂停中且未收到 FILE_COMPLETE → 等待恢复
+      while (_paused && !_cancelled) {
+        await Future.delayed(const Duration(milliseconds: 100));
+      }
+      if (_cancelled) { raf?.close(); return; }
 
       if (timedOut) {
         Logger.log('[ENG] FILE_COMPLETE timeout! retries=${file.retries}/$retryCount');
@@ -935,6 +978,10 @@ class TransferSession {
           final file = allFiles[nextIndex];
           nextIndex++;
           await _transferSingleFile(file);
+          // 文件完成后再次检查暂停：防止暂停期间 FILE_COMPLETE 竞态导致连续发送
+          while (_paused && !_cancelled) {
+            await Future.delayed(const Duration(milliseconds: 100));
+          }
         }
       } finally {
         active.dec();
