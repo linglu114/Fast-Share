@@ -349,6 +349,7 @@ class TransferSession {
     _paused = true;
     _cancelConcurrencyTimer(); // 暂停期间不调整并发数
     Logger.log('[ENG] PAUSED transferId=$transferId');
+    print('[PAUSE-TRACE] _paused=true ${DateTime.now().millisecondsSinceEpoch}');
     // 立即发送 PAUSE 到 socket — 单次 _sendRawBytes 不与 chunk 数据交织
     if (!_socketClosed) {
       try {
@@ -707,7 +708,10 @@ class TransferSession {
         // 导致暂停后至少多传一个 chunk。
         await Future.delayed(Duration.zero);
         if (_cancelled) break;
-        if (_paused) continue; // 重新进入 while(_paused) 等待
+        if (_paused) {
+          print('[PAUSE-TRACE] loop-yield detected pause before chunk i=$i ts=${DateTime.now().millisecondsSinceEpoch}');
+          continue; // 重新进入 while(_paused) 等待
+        }
 
         // 恢复后立即在安全边界发送 TRANSFER_RESUME：此时刚退出 while(_paused)，
         // 无 FILE_DATA 正在写入 socket，不会与控制帧交织
@@ -742,15 +746,13 @@ class TransferSession {
         final tRead1 = DateTime.now().microsecondsSinceEpoch;
         readUs += tRead1 - tRead0;
 
-        // raf.read() / _requestChunk() 完成后，async 函数以微任务恢复。
-        // Dart 事件循环先消费完整个微任务队列才处理下一事件，因此队列
-        // 中排队的 pause 命令在此刻仍未被消费，_paused 为 false。
-        // 必须 _sendRawBytes 前 yield 让出事件循环，否则至少多传 1 chunk。
-        await Future.delayed(Duration.zero);
-        if (_cancelled) break;
-        if (_paused) continue; // 重新进入 while(_paused)
+        // raf.read() 本身是 await，I/O 期间事件循环已处理排队消息。
+        // 只需同步检查，无需额外 yield。
+        if (_paused && !_cancelled) continue;
 
-        // 单次 socket.add() 发送完整 DATA 帧
+        // 构建 FLP 帧（8MB 数据+头+尾，全程同步，阻塞事件循环 ~1-5ms）。
+        // 期间 pause 消息无法被处理，必须在帧构建完成后 yield 一次
+        // 让事件循环消费排队中的 pause，再决定是否发送。
         final tSend0 = DateTime.now().microsecondsSinceEpoch;
         final header = FlpFrame.buildFileDataHeader(
           transferId: transferId,
@@ -759,22 +761,29 @@ class TransferSession {
           offset: offset,
           dataLength: currentChunkSize,
         );
-        {
-          final zc = FlpFrame.zeroChecksum;
-          final frame = Uint8List(header.length + data.length + zc.length);
-          frame.setAll(0, header);
-          frame.setAll(header.length, data);
-          frame.setAll(header.length + data.length, zc);
-          if (!_sendRawBytes(frame, allowWhenPaused: false)) {
-            // 暂停时 _sendRawBytes 返回 false，不回退 offset/i，
-            // 恢复后重读同一 chunk 重新发送。
-            if (_paused) continue;
-            break; // socket closed or cancelling
-          }
+        final zc = FlpFrame.zeroChecksum;
+        final frame = Uint8List(header.length + data.length + zc.length);
+        frame.setAll(0, header);
+        frame.setAll(header.length, data);
+        frame.setAll(header.length + data.length, zc);
+
+        // 帧构建完成后 yield 事件循环：处理帧构建期间排队的 pause 消息
+        await Future.delayed(Duration.zero);
+        if (_cancelled) break;
+        if (_paused) continue; // 丢弃已构建帧，恢复后重读重发
+
+        // 发送数据帧。_sendRawBytes 含同步 _paused 守卫作为最后兜底。
+        if (!_sendRawBytes(frame, allowWhenPaused: false)) {
+          if (_paused) continue;
+          break; // socket closed or cancelling
         }
 
         // 写入过程中 socket 可能已由错误回调关闭，此时立即终止
-        if (_cancelled || _socketClosed) break;
+        if (_cancelled || _socketClosed) {
+          print('[PAUSE-TRACE] chunk send aborted i=$i cancelled=$_cancelled socketClosed=$_socketClosed');
+          break;
+        }
+        print('[PAUSE-TRACE] chunk SENT i=$i offset=$offset len=$currentChunkSize ts=${DateTime.now().millisecondsSinceEpoch}');
 
         final tSend1 = DateTime.now().microsecondsSinceEpoch;
         sendUs += tSend1 - tSend0;
@@ -1316,7 +1325,10 @@ class TransferSession {
   /// 当前操作（已暂停 / socket 已关闭 / 正在取消）。
   bool _sendRawBytes(Uint8List bytes, {bool allowWhenPaused = true}) {
     if (_socketClosed || _cancelling) return false;
-    if (!allowWhenPaused && _paused) return false;
+    if (!allowWhenPaused && _paused) {
+      print('[PAUSE-TRACE] _sendRawBytes BLOCKED by _paused len=${bytes.length} ts=${DateTime.now().millisecondsSinceEpoch}');
+      return false;
+    }
     try {
       _socket?.add(bytes);
       return true;
