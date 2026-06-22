@@ -699,6 +699,16 @@ class TransferSession {
           await Future.delayed(const Duration(milliseconds: 100));
         }
 
+        // 让出控制权给事件循环，确保上一个 chunk 处理期间排队中的
+        // pause 命令在当前 chunk 开始 I/O 前被消费。否则 round-trip：
+        //   raf.read() 完成 → 微任务恢复 → _paused 检查(仍为 false)
+        //   → 构建+发送 frame → i++ → 回到顶部 while(_paused)
+        //   → 仍为 false（pause 还在事件队列）→ 继续下一轮
+        // 导致暂停后至少多传一个 chunk。
+        await Future.delayed(Duration.zero);
+        if (_cancelled) break;
+        if (_paused) continue; // 重新进入 while(_paused) 等待
+
         // 恢复后立即在安全边界发送 TRANSFER_RESUME：此时刚退出 while(_paused)，
         // 无 FILE_DATA 正在写入 socket，不会与控制帧交织
         if (_resumeFramePending && !_socketClosed) {
@@ -733,6 +743,10 @@ class TransferSession {
         readUs += tRead1 - tRead0;
 
         // raf.read() 期间可能收到 PAUSE，立即回跳；i 不变 + setPositionSync 确保重读正确
+        if (_paused && !_cancelled) continue;
+
+        // 发送前最终检查 — 兜底保护，防止 frame 构建期间排队事件被处理
+        // （belt-and-suspenders，与顶部 yield+recheck 配合）
         if (_paused && !_cancelled) continue;
 
         // 单次 socket.add() 发送完整 DATA 帧
