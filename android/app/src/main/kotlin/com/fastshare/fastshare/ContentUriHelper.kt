@@ -315,15 +315,19 @@ object ContentUriHelper {
     // Android 15 when the app lacks descendant-level permission
     // (which is always the case under scoped storage).
     //
-    // Reading strategy:
-    // On Android 15, the DownloadsProvider rejects openFileDescriptor
-    // on document URIs built from the tree (both buildDocumentUri
-    // and buildDocumentUriUsingTree variants). To work around this,
-    // we resolve the real filesystem path for every file by
-    // reconstructing it from the tree structure:
-    //   /storage/emulated/0/Download/<folderName>/<relativePath>
-    // When the real path is readable, the Flutter engine bypasses
-    // SAF entirely and reads via dart:io File API.
+    // 关键点：后代文件 URI 必须用 buildDocumentUriUsingTree(treeUri, docId)
+    // 构造，才能继承 ACTION_OPEN_DOCUMENT_TREE 授予的 tree 权限。早期实现
+    // 误用普通 buildDocumentUri(authority, docId)，构造出的 URI 不带 tree
+    // 授权，在 Android 15（scoped storage 严格执行、requestLegacyExternalStorage
+    // 失效）下 openFileDescriptor / openInputStream / query(_data) 全被拒绝，
+    // 导致文件夹内文件读不出。Android 10 因 requestLegacyExternalStorage 生效、
+    // realPath 命中 dart:io 直读而掩盖了该问题。
+    //
+    // DownloadsProvider 对 msf: 等 docId 仍可能拒绝 openFileDescriptor，
+    // 由 openContentFd 里既有的 Downloads 旁路 (content://downloads/...)
+    // 和 openInputStream 兜底 (readChunk) 处理。realPath 重构
+    // (/storage/emulated/0/Download/...) 仅作为可绕过 SAF 的读优化，Android 15
+    // 上 File.canRead() 为 false 会自动跳过，不影响正确性。
     // ═══════════════════════════════════════════════════════════
 
     private val PROJECTION = arrayOf(
@@ -435,8 +439,11 @@ object ContentUriHelper {
                         result.addAll(traverseTree(
                             context, treeUri, docId, "$prefix$name/", downloadsRoot))
                     } else {
-                        val authority = treeUri.authority ?: continue
-                        val fileUri = DocumentsContract.buildDocumentUri(authority, docId)
+                        // 后代文件 URI 必须用 buildDocumentUriUsingTree 构造，才能继承
+                        // ACTION_OPEN_DOCUMENT_TREE 授予的 tree 权限。普通 buildDocumentUri
+                        // 不带 tree 授权，Android 15 下 openFileDescriptor/openInputStream/
+                        // query(_data) 会被 SecurityException 拒绝，导致文件夹内文件读不出。
+                        val fileUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
 
                         // Resolve the real filesystem path:
                         // 1. Try _data column from the document URI (works for some files)

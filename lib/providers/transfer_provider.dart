@@ -503,19 +503,17 @@ class TransferNotifier extends Notifier<void> {
     // 并行：启动引擎 + 为 content URI 解析 fd 直读路径
     final engineReady = _ensureEngine();
 
-    // 为无 realPath 的 content URI 打开文件描述符，
-    // 让 Engine Isolate 通过 /proc/self/fd/$fd 直读，消除 Isolate 往返开销
+    // 预打开 native FileChannel / InputStream，让 readChunk 路径获得 O(1) seek。
+    // 不把 fd 号传给 Engine Isolate — Android 15 SAF fd 是 pipe/FUSE 而非普通
+    // 文件 inode，Engine Isolate 里 File('/proc/self/fd/$fd').open() 会 EACCES。
+    // Engine 对无 realPath 的文件统一走 contentUri + SendPort → readChunk。
     final resolvedContentFiles = <Map<String, dynamic>>[];
     if (finalContentFiles != null) {
       for (final f in finalContentFiles) {
         final uri = f['uri'] as String? ?? '';
         final realPath = f['realPath'] as String?;
         if (realPath == null && uri.isNotEmpty && ContentUriReader.isSupported) {
-          final fd = await ContentUriReader.openContentFd(uri);
-          if (fd >= 0) {
-            resolvedContentFiles.add({...f, 'fd': fd});
-            continue;
-          }
+          await ContentUriReader.openContentFd(uri); // 预打开，忽略 fd 返回值
         }
         resolvedContentFiles.add(f);
       }
