@@ -1202,7 +1202,6 @@ class TransferSession {
             _totalAckedBytes += ackOffset - prevAcked;
             file.lastAckedOffset = ackOffset;
           }
-          _updateSpeed();
           _notifyProgress();
         } else {
           Logger.log('[ENG] _onAckReceived: UNKNOWN fileId=$fileId (not in _files)');
