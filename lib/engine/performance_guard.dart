@@ -84,10 +84,12 @@ class DirectoryTreeCreator {
 ///
 /// 暂停语义：[pause] 后 [acquire] 立即阻塞（不消费窗口额度），即使窗口
 /// 有空闲；[resume] 后恢复竞争。点击暂停后发送端最多再发完窗口内已预占
-/// 的数据（默认 1 个 8MB chunk ≈ 0.16s@50MB/s），真正实现网络级即时暂停。
+/// 的数据（默认 3 个 8MB chunk ≈ 0.5s@50MB/s），实现网络级即时暂停同时
+/// 保持流水线深度避免停等协议损失吞吐量。
 class SlidingWindow {
-  /// 默认窗口 8MB（= 一个 chunkSize），暂停时在途数据上限即此值。
-  static const int defaultMaxBytes = 8 * 1024 * 1024; // 8MB
+  /// 默认窗口 24MB（= 3 × chunkSize），保持流水线深度避免停等，
+  /// 暂停时在途数据上限 ≈ 0.5s @ 50MB/s，响应仍然及时。
+  static const int defaultMaxBytes = 24 * 1024 * 1024; // 24MB
 
   final int maxBytes;
 

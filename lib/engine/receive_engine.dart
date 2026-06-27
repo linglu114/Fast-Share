@@ -60,7 +60,9 @@ class ReceiveEngine {
   final List<double> _speedSamples = [];
   double _peakSpeed = 0;
 
-  static const _ackBatchBytes = 16 * 1024 * 1024; // 16 MB
+  // ACK batch threshold ≤ chunkSize (8MB) 保证每个 chunk 立即 ACK，
+  // 否则发送端滑动窗口会被 500ms 定时器延迟卡住，吞吐量减半。
+  static const _ackBatchBytes = 8 * 1024 * 1024; // 8 MB
   static const _ackInterval = Duration(milliseconds: 500);
 
   ReceiveEngine(this._uiPort) {

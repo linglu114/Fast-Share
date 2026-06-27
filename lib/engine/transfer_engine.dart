@@ -252,8 +252,9 @@ class TransferSession {
     if (speedLimit > 0) {
       _tokenBucket = TokenBucket(speedLimit);
     }
-    // 滑动窗口 = chunkSize，确保暂停时最多 1 个 chunk 在途
-    _window = SlidingWindow(maxBytes: chunkSize);
+    // 滑动窗口 = 3×chunkSize，保持流水线深度（3 chunk 同时在途），
+    // 避免窗口太小导致应用层停等协议，吞吐量减半。
+    _window = SlidingWindow(maxBytes: 3 * chunkSize);
   }
 
   // ═══════════════════════════════════════════════════════════
