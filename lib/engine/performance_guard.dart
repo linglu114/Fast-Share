@@ -76,44 +76,125 @@ class DirectoryTreeCreator {
 // 内存保护 (需求 §19)
 // ═══════════════════════════════════════════════════════════
 
-/// 滑动窗口管理器 — 待处理数据上限 64MB
+/// 滑动窗口管理器 — 限制发送端在途未确认字节数，提供真正的流控与即时暂停。
+///
+/// 工作原理：发送每个 chunk 前调用 [acquire] 预占窗口额度，收到接收端
+/// ACK 后调用 [release] 归还额度。窗口满时 [acquire] 阻塞，迫使发送端
+/// 停止向 socket 灌数据——此时在途数据量 = 窗口占用，而非内核缓冲上限。
+///
+/// 暂停语义：[pause] 后 [acquire] 立即阻塞（不消费窗口额度），即使窗口
+/// 有空闲；[resume] 后恢复竞争。点击暂停后发送端最多再发完窗口内已预占
+/// 的数据（默认 1 个 8MB chunk ≈ 0.16s@50MB/s），真正实现网络级即时暂停。
 class SlidingWindow {
-  static const int maxPendingBytes = 64 * 1024 * 1024; // 64MB
+  /// 默认窗口 8MB（= 一个 chunkSize），暂停时在途数据上限即此值。
+  static const int defaultMaxBytes = 8 * 1024 * 1024; // 8MB
+
   final int maxBytes;
 
   int _pendingBytes = 0;
   final _waiters = <_WindowWaiter>[];
+  bool _paused = false;
+  bool _cancelled = false;
 
-  SlidingWindow({this.maxBytes = maxPendingBytes});
+  SlidingWindow({this.maxBytes = defaultMaxBytes});
 
-  /// 尝试分配空间，超出则等待
+  /// 预占窗口额度。窗口满或已暂停时阻塞，直到 [release] 释放额度或
+  /// [resume]/[cancel] 唤醒。
+  ///
+  /// 取消时抛出 [StateError]，调用方 catch 后跳出发送循环。
   Future<void> acquire(int bytes) async {
-    if (_pendingBytes + bytes <= maxBytes && _waiters.isEmpty) {
-      _pendingBytes += bytes;
-      return;
-    }
+    while (true) {
+      if (_cancelled) {
+        throw StateError('SlidingWindow cancelled');
+      }
+      // 暂停时阻塞：不消费窗口，等 resume 或 cancel 唤醒。
+      if (_paused) {
+        final completer = Completer<void>();
+        final waiter = _WindowWaiter(completer, bytes, paused: true);
+        _waiters.add(waiter);
+        await completer.future;
+        // resume 后回到循环顶部，重新检查 _cancelled / _paused / 窗口
+        continue;
+      }
 
-    final completer = Completer<void>();
-    _waiters.add(_WindowWaiter(completer, bytes));
-    await completer.future;
-    _pendingBytes += bytes;
+      if (_pendingBytes + bytes <= maxBytes) {
+        _pendingBytes += bytes;
+        return;
+      }
+
+      // 窗口满，排队等待 release 唤醒
+      final completer = Completer<void>();
+      final waiter = _WindowWaiter(completer, bytes);
+      _waiters.add(waiter);
+      await completer.future;
+      // release 唤醒后回到循环顶部——release 已预占 _pendingBytes
+      // 重新检查窗口状态（可能在等待期间被暂停/取消）
+    }
   }
 
-  /// 释放空间
+  /// 归还额度（收到 ACK 时调用）。唤醒等待中的 acquire。
   void release(int bytes) {
-    _pendingBytes -= bytes;
+    if (_pendingBytes > bytes) {
+      _pendingBytes -= bytes;
+    } else {
+      _pendingBytes = 0;
+    }
 
-    // 按 FIFO 顺序唤醒等待者，仅在剩余空间足够时释放
+    _wakeWaiters();
+  }
+
+  /// 暂停：后续 acquire 阻塞，但已 acquire 的在途数据不变。
+  void pause() {
+    _paused = true;
+  }
+
+  /// 恢复：唤醒所有因 pause 阻塞的 acquire，让它们重新竞争窗口额度。
+  void resume() {
+    _paused = false;
+    _wakeWaiters();
+  }
+
+  /// 取消：以错误唤醒所有等待者，acquire 抛 StateError，发送循环退出。
+  void cancel() {
+    _cancelled = true;
+    final waiters = List<_WindowWaiter>.from(_waiters);
+    _waiters.clear();
+    for (final w in waiters) {
+      if (!w.completer.isCompleted) {
+        w.completer.completeError(StateError('SlidingWindow cancelled'));
+      }
+    }
+  }
+
+  /// 唤醒已排队的等待者（release / resume 共用）。
+  ///
+  /// paused waiter 由 resume 唤醒后，回到 acquire 内的 while(true) 循环
+  /// 重新走判断——它们此时已完成 await，在循环顶部自行决定是否入队。
+  /// 非 paused waiter 由 release 唤醒时，release 已预占 _pendingBytes，
+  /// acquire 循环顶部的 `_pendingBytes + bytes <= maxBytes` 检查会通过，
+  /// 直接 return（不会重复入队）。
+  void _wakeWaiters() {
+    final toWake = <_WindowWaiter>[];
     while (_waiters.isNotEmpty) {
       final waiter = _waiters.first;
-      if (_pendingBytes + waiter.bytes <= maxBytes) {
-        _waiters.removeAt(0);
-        waiter.completer.complete();
-        // acquire() 会在 completer 完成后立即 _pendingBytes += bytes，
-        // 所以这里需要预先占用空间防止超额：
-        _pendingBytes += waiter.bytes;
-      } else {
+      if (waiter.paused && _paused) {
+        // 暂停态 waiter 且仍在暂停中——不唤醒（resume 会重新调 _wakeWaiters）
         break;
+      }
+      if (!waiter.paused && _pendingBytes + waiter.bytes > maxBytes) {
+        // 非暂停 waiter 但窗口空间不够——不唤醒
+        break;
+      }
+      _waiters.removeAt(0);
+      if (!waiter.paused) {
+        // 非 paused waiter：预占空间
+        _pendingBytes += waiter.bytes;
+      }
+      toWake.add(waiter);
+    }
+    for (final w in toWake) {
+      if (!w.completer.isCompleted) {
+        w.completer.complete();
       }
     }
   }
@@ -125,7 +206,8 @@ class SlidingWindow {
 class _WindowWaiter {
   final Completer<void> completer;
   final int bytes;
-  const _WindowWaiter(this.completer, this.bytes);
+  final bool paused;
+  const _WindowWaiter(this.completer, this.bytes, {this.paused = false});
 }
 
 /// 缓冲区复用池 — 避免频繁分配/释放

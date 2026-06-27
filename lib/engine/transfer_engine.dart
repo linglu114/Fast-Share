@@ -210,6 +210,9 @@ class TransferSession {
   // 令牌桶
   TokenBucket? _tokenBucket;
 
+  // 滑动窗口流控（限制在途未确认字节数，实现即时暂停）
+  late final SlidingWindow _window;
+
   // 进度去抖
   Timer? _progressTimer;
   bool _progressDirty = false;
@@ -249,6 +252,8 @@ class TransferSession {
     if (speedLimit > 0) {
       _tokenBucket = TokenBucket(speedLimit);
     }
+    // 滑动窗口 = chunkSize，确保暂停时最多 1 个 chunk 在途
+    _window = SlidingWindow(maxBytes: chunkSize);
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -352,7 +357,10 @@ class TransferSession {
   void pause() {
     _paused = true;
     _cancelConcurrencyTimer(); // 暂停期间不调整并发数
-    Logger.log('[ENG] PAUSED transferId=$transferId');
+    // 暂停滑动窗口：后续 acquire 立即阻塞，发送端不再产生新的在途数据。
+    // 已 acquire 但未发送的帧仍会发出去（最多 1 个 chunk = 8MB）。
+    _window.pause();
+    Logger.log('[ENG] PAUSED transferId=$transferId inFlight=${_window.pendingBytes}');
     // 立即发送 PAUSE 到 socket — 单次 _sendRawBytes 不与 chunk 数据交织
     if (!_socketClosed) {
       try {
@@ -367,6 +375,9 @@ class TransferSession {
   void resume() {
     _paused = false;
     _startConcurrencyMonitor(); // 恢复后重新评估并发数
+    // 恢复滑动窗口：唤醒被阻塞的 acquire，重新竞争窗口额度。
+    // 窗口内的在途数据由 ACK 逐步释放，不会超发。
+    _window.resume();
     Logger.log('[ENG] RESUMED transferId=$transferId');
     _resumeFramePending = true;
     if (!_socketClosed) {
@@ -389,6 +400,8 @@ class TransferSession {
     _stopConcurrencyMonitor();
     _stopSpeedTimer();
     _tokenBucket?.stop();
+    // 取消滑动窗口：用 StateError 唤醒所有阻塞的 acquire，chunk 循环退出
+    _window.cancel();
     for (final c in _ackWaiters.values) {
       if (!c.isCompleted) c.complete();
     }
@@ -782,9 +795,24 @@ class TransferSession {
         if (_cancelled) break;
         if (_paused) continue; // 丢弃已构建帧，恢复后重读重发
 
+        // 滑动窗口流控：等待窗口额度，窗口满时阻塞（背压）。
+        // 这是从源头限制在途数据的核心——发送端不再全速灌入 socket，
+        // 而是受接收端 ACK 驱动。暂停时 _window.pause() 导致 acquire 阻塞，
+        // 网络级即时停止，最多再发完已 acquire 的 1 个 chunk。
+        try {
+          await _window.acquire(currentChunkSize);
+        } on StateError {
+          // 窗口取消 → 传输取消
+          break;
+        }
+
         // 发送数据帧。_sendRawBytes 含同步 _paused 守卫作为最后兜底。
         if (!_sendRawBytes(frame, allowWhenPaused: false)) {
-          if (_paused) continue;
+          if (_paused) {
+            // acquire 成功但发送前被暂停：退还窗口额度
+            _window.release(currentChunkSize);
+            continue;
+          }
           break; // socket closed or cancelling
         }
 
@@ -935,6 +963,8 @@ class TransferSession {
         });
       }
     } catch (e) {
+      // 已取消：不重传，直接返回
+      if (_cancelled) return;
       // 重试逻辑
       if (file.retries < retryCount) {
         file.retries++;
@@ -1207,8 +1237,12 @@ class TransferSession {
         if (file != null) {
           final prevAcked = file.lastAckedOffset;
           if (ackOffset > prevAcked) {
-            _totalAckedBytes += ackOffset - prevAcked;
+            final newlyAcked = ackOffset - prevAcked;
+            _totalAckedBytes += newlyAcked;
             file.lastAckedOffset = ackOffset;
+            // 释放窗口额度：ACK 确认了 newlyAcked 字节，
+            // 驱动被阻塞的 acquire 继续发送。
+            _window.release(newlyAcked);
           }
           _notifyProgress();
         } else {
@@ -1254,6 +1288,18 @@ class TransferSession {
         _fileCompleted[fileId] = success;
         final waiter = _ackWaiters.remove(fileId);
         waiter?.complete();
+
+        // 释放该文件剩余的窗口额度。FILE_COMPLETE 表示接收端已完整接收，
+        // 未 ACK 的字节实际上已确认，退还窗口避免永久占用。
+        final completedFile = _files.where((f) => f.fileId == fileId).firstOrNull;
+        if (completedFile != null) {
+          final unacked = completedFile.bytesTransferred - completedFile.lastAckedOffset;
+          if (unacked > 0) {
+            _window.release(unacked);
+            completedFile.lastAckedOffset = completedFile.bytesTransferred;
+            _totalAckedBytes += unacked;
+          }
+        }
       }
     } catch (e) {
       _sendEvent('error', {
@@ -1496,8 +1542,13 @@ class TransferSession {
   // 辅助方法
   // ═══════════════════════════════════════════════════════════
 
-  /// 文件重传时重置进度计数器，防止 _totalAckedBytes 累积旧值
+  /// 文件重传时重置进度计数器，并退还未确认字节的窗口额度。
   void _resetFileProgress(FileEntry file) {
+    final unacked = file.bytesTransferred - file.lastAckedOffset;
+    if (unacked > 0) {
+      // 退还已 acquire 但未被 ACK 确认的窗口额度（接收端丢弃了该文件）
+      _window.release(unacked);
+    }
     _totalAckedBytes -= file.lastAckedOffset;
     _bytesTransferred -= file.bytesTransferred;
     file.lastAckedOffset = 0;
