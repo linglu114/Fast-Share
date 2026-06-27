@@ -132,15 +132,19 @@ class SlidingWindow {
     }
   }
 
-  /// 归还额度（收到 ACK 时调用）。唤醒等待中的 acquire。
+  /// 归还额度（收到 ACK 时调用）。
+  ///
+  /// 暂停期间仅更新会计，不唤醒等待者——防止恢复前新数据泄露。
   void release(int bytes) {
     if (_pendingBytes > bytes) {
       _pendingBytes -= bytes;
     } else {
       _pendingBytes = 0;
     }
-
-    _wakeWaiters();
+    // 暂停中不唤醒：在途数据 ACK 更新会计即可，等 resume 统一唤醒
+    if (!_paused) {
+      _wakeNormalWaiters();
+    }
   }
 
   /// 暂停：后续 acquire 阻塞，但已 acquire 的在途数据不变。
@@ -148,10 +152,13 @@ class SlidingWindow {
     _paused = true;
   }
 
-  /// 恢复：唤醒所有因 pause 阻塞的 acquire，让它们重新竞争窗口额度。
+  /// 恢复：优先唤醒所有因 pause 阻塞的 acquire（无条件），
+  /// 再按额度唤醒窗口满的 normal waiter。避免 FIFO 队头正常 waiter
+  /// 卡住后面 paused waiter 的永久阻塞问题。
   void resume() {
     _paused = false;
-    _wakeWaiters();
+    _wakePausedWaiters();
+    _wakeNormalWaiters();
   }
 
   /// 取消：以错误唤醒所有等待者，acquire 抛 StateError，发送循环退出。
@@ -166,35 +173,45 @@ class SlidingWindow {
     }
   }
 
-  /// 唤醒已排队的等待者（release / resume 共用）。
+  /// 唤醒所有 paused waiter（无条件，不检查窗口空间）。
   ///
-  /// paused waiter 由 resume 唤醒后，回到 acquire 内的 while(true) 循环
-  /// 重新走判断——它们此时已完成 await，在循环顶部自行决定是否入队。
-  /// 非 paused waiter 由 release 唤醒时，release 已预占 _pendingBytes，
-  /// acquire 循环顶部的 `_pendingBytes + bytes <= maxBytes` 检查会通过，
-  /// 直接 return（不会重复入队）。
-  void _wakeWaiters() {
-    final toWake = <_WindowWaiter>[];
-    while (_waiters.isNotEmpty) {
-      final waiter = _waiters.first;
-      if (waiter.paused && _paused) {
-        // 暂停态 waiter 且仍在暂停中——不唤醒（resume 会重新调 _wakeWaiters）
-        break;
+  /// 它们回到 acquire 循环顶部后自行判断是立即获取窗口还是在
+  /// normal 队列排队。不在此处预占 _pendingBytes——它们可能因
+  /// 窗口空间不足而进入 normal 等待，由 _wakeNormalWaiters 统一处理。
+  void _wakePausedWaiters() {
+    final pausedToWake = <_WindowWaiter>[];
+    _waiters.removeWhere((w) {
+      if (w.paused) {
+        pausedToWake.add(w);
+        return true;
       }
-      if (!waiter.paused && _pendingBytes + waiter.bytes > maxBytes) {
-        // 非暂停 waiter 但窗口空间不够——不唤醒
-        break;
-      }
-      _waiters.removeAt(0);
-      if (!waiter.paused) {
-        // 非 paused waiter：预占空间
-        _pendingBytes += waiter.bytes;
-      }
-      toWake.add(waiter);
-    }
-    for (final w in toWake) {
+      return false;
+    });
+    for (final w in pausedToWake) {
       if (!w.completer.isCompleted) {
         w.completer.complete();
+      }
+    }
+  }
+
+  /// 按 FIFO 顺序唤醒有足够空间的 non-paused waiter。
+  /// 预占 _pendingBytes 防止 acquire 重复入队。
+  void _wakeNormalWaiters() {
+    while (_waiters.isNotEmpty) {
+      final waiter = _waiters.first;
+      if (waiter.paused) {
+        // 残留 paused waiter 不应该出现（_wakePausedWaiters 先执行），
+        // 安全性：跳过不唤醒，由后续 resume/release 重新触发。
+        _waiters.removeAt(0);
+        continue;
+      }
+      if (_pendingBytes + waiter.bytes > maxBytes) {
+        break; // 空间不够，后续也够不了（FIFO）
+      }
+      _waiters.removeAt(0);
+      _pendingBytes += waiter.bytes;
+      if (!waiter.completer.isCompleted) {
+        waiter.completer.complete();
       }
     }
   }
