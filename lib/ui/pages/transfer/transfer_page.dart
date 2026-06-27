@@ -569,7 +569,7 @@ class _ReceiveTransferCard extends StatelessWidget {
 class _QueueItem extends StatefulWidget {
   final TransferTask task;
   final WidgetRef ref;
-  const _QueueItem({required this.task, required this.ref});
+  const _QueueItem({super.key, required this.task, required this.ref});
 
   @override
   State<_QueueItem> createState() => _QueueItemState();
