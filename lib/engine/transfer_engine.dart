@@ -1679,42 +1679,49 @@ enum FileStatus { pending, transferring, completed, failed }
 
 enum TransferStrategy { sequential, concurrent, mixed }
 
-/// 令牌桶限速器 (需求 §16)
+/// 令牌桶限速器 — 按需补充，无定时器，浮点令牌消除累积误差。
 ///
-/// 使用 burst 容量 + 简单自旋等待。burst 至少能容纳一个完整 chunk
-/// (8 MB)，防止 chunkSize > rate 时死锁。空闲时令牌累积到 burst 上限，
-/// 活跃时维持在 _maxRate 附近。
+/// - burst = max(rate, chunkSize)，防止低速率时 chunkSize > rate 死锁
+/// - 初始 burst 满额度：允许首 chunk 即时发送，避免冷启动长时间无响应
+/// - consume() 精确计算等待时间，不再 100ms 轮询
+/// - 无 Timer：按需 refill，零后台开销
 class TokenBucket {
   final int _maxRate; // bytes/s
-  late final int _burstSize;
-  int _tokens;
-  int _lastRefill;
-  Timer? _timer;
+  final int _burstSize; // max tokens
+  double _tokens; // 浮点令牌，消除累积误差
+  int _lastRefill; // 上次 refill 时间戳 (ms)
 
   TokenBucket(this._maxRate)
-      : _tokens = (_maxRate > (8 * 1024 * 1024) ? _maxRate : (8 * 1024 * 1024)),
-        _burstSize = (_maxRate > (8 * 1024 * 1024) ? _maxRate : (8 * 1024 * 1024)),
+      : _burstSize = _maxRate > chunkSize ? _maxRate : chunkSize,
         _lastRefill = DateTime.now().millisecondsSinceEpoch {
-    _timer = Timer.periodic(const Duration(milliseconds: 100), (_) => _refill());
+    _tokens = _burstSize.toDouble(); // 初始满额度
   }
 
   void _refill() {
     final now = DateTime.now().millisecondsSinceEpoch;
     final elapsed = now - _lastRefill;
+    if (elapsed <= 0) return;
     _lastRefill = now;
-    final added = (_maxRate * elapsed / 1000).round();
-    _tokens = _tokens + added > _burstSize ? _burstSize : _tokens + added;
+    _tokens += _maxRate * elapsed / 1000.0;
+    if (_tokens > _burstSize) _tokens = _burstSize.toDouble();
   }
 
   Future<void> consume(int bytes) async {
-    while (_tokens < bytes) {
-      await Future.delayed(const Duration(milliseconds: 100));
+    _refill();
+    if (_tokens >= bytes) {
+      _tokens -= bytes;
+      return;
+    }
+    // 精确计算等待时间，替代 100ms 轮询
+    final needed = bytes - _tokens;
+    final waitMs = (needed / _maxRate * 1000).ceil();
+    if (waitMs > 0) {
+      await Future.delayed(Duration(milliseconds: waitMs));
+      _refill();
     }
     _tokens -= bytes;
+    if (_tokens < 0) _tokens = 0; // 防御性
   }
 
-  void stop() {
-    _timer?.cancel();
-    _timer = null;
-  }
+  void stop() {} // 无 Timer 需取消，保留接口兼容
 }

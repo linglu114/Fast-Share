@@ -1,5 +1,6 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../providers/settings_provider.dart';
@@ -169,30 +170,24 @@ class SettingsPage extends ConsumerWidget {
   }
 
   Future<void> _pickSpeedLimit(BuildContext context, WidgetRef ref) async {
-    final selected = await showDialog<int>(
+    final currentLimit = ref.read(speedLimitProvider);
+    // 当前值：0 = 不限制，否则转换为 MB/s
+    final initialUnlimited = currentLimit == 0;
+    final initialMB = initialUnlimited ? 100 : (currentLimit ~/ (1024 * 1024)).clamp(1, 100);
+
+    final result = await showDialog<Map<String, dynamic>>(
       context: context,
-      builder: (ctx) => SimpleDialog(
-        title: const Text('传输限速'),
-        children: [
-          _speedOption(ctx, 0, '不限制'),
-          _speedOption(ctx, 1 * 1024 * 1024, '1 MB/s'),
-          _speedOption(ctx, 5 * 1024 * 1024, '5 MB/s'),
-          _speedOption(ctx, 10 * 1024 * 1024, '10 MB/s'),
-          _speedOption(ctx, 50 * 1024 * 1024, '50 MB/s'),
-          _speedOption(ctx, 100 * 1024 * 1024, '100 MB/s'),
-        ],
+      builder: (ctx) => _SpeedLimitDialog(
+        initialUnlimited: initialUnlimited,
+        initialMB: initialMB,
       ),
     );
-    if (selected != null) {
-      await ref.read(speedLimitProvider.notifier).update(selected);
+    if (result != null) {
+      final unlimited = result['unlimited'] as bool;
+      final mb = result['mb'] as int;
+      final bytesPerSecond = unlimited ? 0 : mb * 1024 * 1024;
+      await ref.read(speedLimitProvider.notifier).update(bytesPerSecond);
     }
-  }
-
-  Widget _speedOption(BuildContext context, int value, String label) {
-    return SimpleDialogOption(
-      onPressed: () => Navigator.pop(context, value),
-      child: Text(label),
-    );
   }
 
   Future<void> _pickConcurrentCount(BuildContext context, WidgetRef ref) async {
@@ -555,6 +550,201 @@ void _showAboutDialog(BuildContext context) {
       ],
     ),
   );
+}
+
+/// 传输限速设置弹窗 — 滑块 + 可点击编辑数值 + 不限制开关
+class _SpeedLimitDialog extends StatefulWidget {
+  final bool initialUnlimited;
+  final int initialMB;
+  const _SpeedLimitDialog({required this.initialUnlimited, required this.initialMB});
+
+  @override
+  State<_SpeedLimitDialog> createState() => _SpeedLimitDialogState();
+}
+
+class _SpeedLimitDialogState extends State<_SpeedLimitDialog> {
+  late bool _unlimited;
+  late int _mb;
+  late int _lastMb; // 取消不限制后恢复的值
+  late double _sliderValue;
+  bool _editing = false;
+  final _editController = TextEditingController();
+  final _editFocus = FocusNode();
+
+  @override
+  void initState() {
+    super.initState();
+    _unlimited = widget.initialUnlimited;
+    _mb = widget.initialMB;
+    _lastMb = widget.initialMB;
+    _sliderValue = _mb.toDouble();
+    _editFocus.addListener(_onEditFocusLost);
+  }
+
+  @override
+  void dispose() {
+    _editFocus.removeListener(_onEditFocusLost);
+    _editFocus.dispose();
+    _editController.dispose();
+    super.dispose();
+  }
+
+  void _onEditFocusLost() {
+    if (!_editFocus.hasFocus) _commitEdit();
+  }
+
+  void _commitEdit() {
+    final text = _editController.text.trim();
+    final parsed = int.tryParse(text);
+    final clamped = parsed?.clamp(1, 100) ?? _mb;
+    setState(() {
+      _mb = clamped;
+      _lastMb = clamped;
+      _sliderValue = clamped.toDouble();
+      _editing = false;
+    });
+  }
+
+  void _startEdit() {
+    if (_unlimited) return;
+    _editController.text = _mb.toString();
+    setState(() => _editing = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _editFocus.requestFocus();
+        _editController.selection = TextSelection(
+          baseOffset: 0,
+          extentOffset: _editController.text.length,
+        );
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return AlertDialog(
+      title: const Text('传输限速'),
+      content: SizedBox(
+        width: 320,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // 数值显示 / 编辑
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                if (_editing)
+                  SizedBox(
+                    width: 64,
+                    child: TextField(
+                      controller: _editController,
+                      focusNode: _editFocus,
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: scheme.primary),
+                      decoration: const InputDecoration(
+                        isDense: true,
+                        contentPadding: EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                        border: OutlineInputBorder(),
+                      ),
+                      onSubmitted: (_) => _commitEdit(),
+                    ),
+                  )
+                else
+                  GestureDetector(
+                    onTap: _unlimited ? null : _startEdit,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(10),
+                        color: _unlimited
+                            ? Colors.grey.shade200
+                            : scheme.primaryContainer.withAlpha(120),
+                      ),
+                      child: Text(
+                        _unlimited ? '—' : '$_mb',
+                        style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                          color: _unlimited ? Colors.grey : scheme.primary,
+                        ),
+                      ),
+                    ),
+                  ),
+                const SizedBox(width: 8),
+                Text('MB/s',
+                    style: TextStyle(fontSize: 15, color: _unlimited ? Colors.grey : null)),
+              ],
+            ),
+            const SizedBox(height: 16),
+            // 滑块
+            Slider(
+              value: _sliderValue,
+              min: 1,
+              max: 100,
+              divisions: 99,
+              onChanged: _unlimited
+                  ? null
+                  : (v) {
+                      setState(() {
+                        _sliderValue = v;
+                        _mb = v.round();
+                        _lastMb = _mb;
+                      });
+                      if (_editing) {
+                        _editController.text = _mb.toString();
+                      }
+                    },
+            ),
+            // 最小/最大标签
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('1 MB/s', style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
+                  Text('100 MB/s', style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
+                ],
+              ),
+            ),
+            // 不限制开关
+            CheckboxListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              title: const Text('不限制', style: TextStyle(fontSize: 14)),
+              value: _unlimited,
+              onChanged: (v) {
+                setState(() {
+                  _unlimited = v ?? false;
+                  _editing = false;
+                  if (!_unlimited) {
+                    _mb = _lastMb;
+                    _sliderValue = _lastMb.toDouble();
+                  }
+                });
+              },
+              controlAffinity: ListTileControlAffinity.leading,
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, {
+            'unlimited': _unlimited,
+            'mb': _mb,
+          }),
+          child: const Text('确定'),
+        ),
+      ],
+    );
+  }
 }
 
 class _SectionHeader extends StatelessWidget {
