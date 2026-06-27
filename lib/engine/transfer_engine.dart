@@ -1394,7 +1394,8 @@ class TransferSession {
   void _startSpeedTimer() {
     final now = DateTime.now().millisecondsSinceEpoch;
     _lastSampleTime = now;
-    _lastSampleBytes = _bytesTransferred;
+    // 基于 ACK 确认字节而非发送字节：反映实际网络吞吐，而非 socket 缓冲区填充速度
+    _lastSampleBytes = _totalAckedBytes;
     _lastActiveTime = now;
     _speedTimer?.cancel();
     _speedTimer = Timer.periodic(const Duration(milliseconds: 1000), (_) {
@@ -1403,14 +1404,13 @@ class TransferSession {
       final deltaMs = now - _lastSampleTime;
       if (deltaMs <= 0) return;
 
-      final deltaBytes = _bytesTransferred - _lastSampleBytes;
+      final deltaBytes = _totalAckedBytes - _lastSampleBytes;
 
-      // 始终推进时间基准，避免空闲时间累积到下一个活跃样本中
+      // 始终推进时间基准
       _lastSampleTime = now;
-      _lastSampleBytes = _bytesTransferred;
+      _lastSampleBytes = _totalAckedBytes;
 
       if (deltaBytes > 0) {
-        // 只在实际有数据传输时记录速度样本
         _lastActiveTime = now;
         final speed = deltaBytes / (deltaMs / 1000.0);
         _speedSamples.add(speed);
@@ -1421,11 +1421,6 @@ class TransferSession {
             ? 0.0
             : _speedSamples.reduce((a, b) => a + b) / _speedSamples.length;
         if (avgSpeed > _peakSpeed) _peakSpeed = avgSpeed;
-      }
-
-      // 超过 3 秒无数据传输 → 清零速度窗口
-      if (_speedSamples.isNotEmpty && now - _lastActiveTime > 3000) {
-        _speedSamples.clear();
       }
     });
   }
