@@ -523,12 +523,17 @@ class TransferNotifier extends Notifier<void> {
         : finalPaths.length;
     final String batchName;
     if (finalFolderMode) {
-      // 文件夹：显示文件夹名（文件数已在卡片副标题展示）
-      if (resolvedContentFiles.isNotEmpty) {
+      // 文件夹：优先用文件夹路径提取名称（finalPaths 是用户选中的文件夹路径）
+      if (finalPaths.isNotEmpty) {
+        batchName = finalPaths.first
+            .replaceAll(RegExp(r'[/\\]+$'), '')
+            .split(RegExp(r'[/\\]'))
+            .last;
+      } else if (resolvedContentFiles.isNotEmpty) {
+        // SAF 内容 URI 回退：从 relativePath 提取顶层文件夹名
         final firstRel = resolvedContentFiles.first['relativePath'] as String? ?? '';
-        batchName = firstRel.split(RegExp(r'[/\\]')).first;
-      } else if (finalPaths.isNotEmpty) {
-        batchName = finalPaths.first.split(RegExp(r'[/\\]')).last;
+        final parts = firstRel.split(RegExp(r'[/\\]'));
+        batchName = parts.length > 1 ? parts.first : firstRel;
       } else {
         batchName = '文件夹';
       }

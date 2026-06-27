@@ -472,12 +472,21 @@ class ConnectionNotifier extends Notifier<Map<String, bool>> {
 
   /// 根据 offer 推断显示名称：文件夹→文件夹名，单文件→文件名，多文件→数量
   static String _resolveBatchName(TransferOffer offer) {
+    if (offer.folderMode) {
+      // 发送端已在 batchName 中算好了文件夹名，直接使用
+      if (offer.batchName != null && offer.batchName!.isNotEmpty) {
+        return offer.batchName!;
+      }
+      // 回退：从第一个文件路径提取
+      if (offer.files.isNotEmpty) {
+        final firstRel = offer.files.first['relativePath'] as String? ?? '';
+        final parts = firstRel.split(RegExp(r'[/\\]'));
+        return parts.length > 1 ? parts.first : firstRel;
+      }
+      return '文件夹';
+    }
     if (offer.files.isEmpty) return '文件传输';
     final firstRel = offer.files.first['relativePath'] as String? ?? '';
-    if (offer.folderMode) {
-      final parts = firstRel.split(RegExp(r'[/\\]'));
-      return parts.length > 1 ? parts.first : firstRel;
-    }
     if (offer.fileCount == 1) {
       return firstRel.split(RegExp(r'[/\\]')).last;
     }
