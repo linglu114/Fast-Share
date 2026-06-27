@@ -566,34 +566,84 @@ class _ReceiveTransferCard extends StatelessWidget {
   Widget _buildStatusChip(TransferStatus status) => _sharedStatusChip(status);
 }
 
-class _QueueItem extends StatelessWidget {
+class _QueueItem extends StatefulWidget {
   final TransferTask task;
   final WidgetRef ref;
   const _QueueItem({required this.task, required this.ref});
 
   @override
+  State<_QueueItem> createState() => _QueueItemState();
+}
+
+class _QueueItemState extends State<_QueueItem> {
+  bool _expanded = false;
+
+  @override
   Widget build(BuildContext context) {
+    final task = widget.task;
+    final ref = widget.ref;
+    final cs = Theme.of(context).colorScheme;
+
     return Card(
-      child: ListTile(
-        leading: Icon(
-          task.folderMode ? Icons.folder : Icons.insert_drive_file,
-          color: Colors.grey,
-        ),
-        title: Text(task.batchName ?? '文件传输',
-            style: const TextStyle(fontSize: 14)),
-        subtitle: Text(
-          '${task.fileCount} 个文件 · ${formatSize(task.totalSize)}',
-          style: const TextStyle(fontSize: 12),
-        ),
-        trailing: IconButton(
-          icon: const Icon(Icons.close, size: 18),
-          tooltip: '移除',
-          onPressed: () {
-            final queue = ref.read(transferQueueProvider);
-            ref.read(transferQueueProvider.notifier).state =
-                queue.where((t) => t.transferId != task.transferId).toList();
-          },
-        ),
+      child: Column(
+        children: [
+          ListTile(
+            leading: Icon(
+              task.folderMode ? Icons.folder : Icons.insert_drive_file,
+              color: Colors.grey,
+            ),
+            title: Text(task.batchName ?? '文件传输',
+                style: const TextStyle(fontSize: 14)),
+            subtitle: Text(
+              '${task.fileCount} 个文件 · ${formatSize(task.totalSize)}',
+              style: const TextStyle(fontSize: 12),
+            ),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  icon: Icon(_expanded ? Icons.expand_less : Icons.expand_more, size: 20),
+                  tooltip: _expanded ? '收起' : '展开文件列表',
+                  onPressed: () => setState(() => _expanded = !_expanded),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close, size: 18),
+                  tooltip: '移除',
+                  onPressed: () {
+                    final queue = ref.read(transferQueueProvider);
+                    ref.read(transferQueueProvider.notifier).state =
+                        queue.where((t) => t.transferId != task.transferId).toList();
+                  },
+                ),
+              ],
+            ),
+            onTap: () => setState(() => _expanded = !_expanded),
+          ),
+          if (_expanded && task.files.isNotEmpty) ...[
+            const Divider(height: 1),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+              child: Column(
+                children: task.files.map((f) => Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Row(
+                    children: [
+                      Icon(Icons.insert_drive_file, size: 14, color: cs.onSurfaceVariant),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(f.relativePath,
+                            style: const TextStyle(fontSize: 12),
+                            overflow: TextOverflow.ellipsis),
+                      ),
+                      Text(formatSize(f.size),
+                          style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
+                    ],
+                  ),
+                )).toList(),
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }
