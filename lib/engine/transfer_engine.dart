@@ -1693,9 +1693,8 @@ class TokenBucket {
 
   TokenBucket(this._maxRate)
       : _burstSize = _maxRate > chunkSize ? _maxRate : chunkSize,
-        _lastRefill = DateTime.now().millisecondsSinceEpoch {
-    _tokens = _burstSize.toDouble(); // 初始满额度
-  }
+        _tokens = (_maxRate > chunkSize ? _maxRate : chunkSize).toDouble(),
+        _lastRefill = DateTime.now().millisecondsSinceEpoch;
 
   void _refill() {
     final now = DateTime.now().millisecondsSinceEpoch;
