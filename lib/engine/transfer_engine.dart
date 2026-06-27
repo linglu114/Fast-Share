@@ -214,6 +214,9 @@ class TransferSession {
   bool _progressDirty = false;
   Timer? _heartbeatTimer;
 
+  // 速度定时器（1s 周期，参照接收端 _startProgress）
+  Timer? _speedTimer;
+
   // 传输模式
   TransferStrategy _strategy = TransferStrategy.concurrent;
 
@@ -383,6 +386,7 @@ class TransferSession {
     _progressTimer?.cancel();
     _stopHeartbeat();
     _stopConcurrencyMonitor();
+    _stopSpeedTimer();
     _tokenBucket?.stop();
     for (final c in _ackWaiters.values) {
       if (!c.isCompleted) c.complete();
@@ -595,6 +599,9 @@ class TransferSession {
     _allFilesDone = Completer<void>(); // 必须在传文件之前创建，否则 TRANSFER_COMPLETE 可能丢失
     Logger.flushSync(); // 落盘扫描和连接阶段日志，防止传输阶段崩溃丢失
 
+    // 启动速度定时器（1s 周期，参照接收端 _startProgress）
+    _startSpeedTimer();
+
     // 自动模式：初始化动态并发调整器
     if (concurrentCount == 0) {
       _concurrencyAdjuster = DynamicConcurrency(
@@ -660,6 +667,7 @@ class TransferSession {
         });
       }
     }
+    _stopSpeedTimer();
   }
 
   /// 单文件顺序传输（零拷贝：header + raf.read() 直接写 socket，无 CRC32）
@@ -790,7 +798,6 @@ class TransferSession {
         offset += currentChunkSize;
         i++; // 仅在成功发送后递增 chunk 索引
 
-        _updateSpeed();
         _notifyProgress();
 
         // 每 10 chunk 输出一次计时分布
@@ -1380,33 +1387,38 @@ class TransferSession {
   }
 
   // ═══════════════════════════════════════════════════════════
-  // 速度计算 (§六 — 1s 采样，3s 滑动窗口)
+  // 速度计算（定时器驱动，1s 采样，6s 滑动窗口 — 参照接收端）
   // ═══════════════════════════════════════════════════════════
 
-  void _updateSpeed() {
-    final now = DateTime.now().millisecondsSinceEpoch;
-    if (_lastSampleTime == 0) {
-      _lastSampleTime = now;
-      _lastSampleBytes = _bytesTransferred;
-      return;
-    }
-
-    final deltaMs = now - _lastSampleTime;
-    if (deltaMs >= 1000) {
-      final deltaBytes = _bytesTransferred - _lastSampleBytes;
-      final speed = deltaBytes / (deltaMs / 1000.0); // bytes/s
-      _speedSamples.add(speed);
-
-      // 保留 3 秒窗口
-      while (_speedSamples.length > 3) {
-        _speedSamples.removeAt(0);
+  void _startSpeedTimer() {
+    _lastSampleTime = DateTime.now().millisecondsSinceEpoch;
+    _lastSampleBytes = _bytesTransferred;
+    _speedTimer?.cancel();
+    _speedTimer = Timer.periodic(const Duration(milliseconds: 1000), (_) {
+      if (_cancelled) return;
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final deltaMs = now - _lastSampleTime;
+      double speed = 0;
+      if (deltaMs > 0) {
+        final deltaBytes = _bytesTransferred - _lastSampleBytes;
+        speed = deltaBytes / (deltaMs / 1000.0);
+        _speedSamples.add(speed);
+        while (_speedSamples.length > 6) {
+          _speedSamples.removeAt(0);
+        }
       }
-
-      if (speed > _peakSpeed) _peakSpeed = speed;
-
       _lastSampleTime = now;
       _lastSampleBytes = _bytesTransferred;
-    }
+      final avgSpeed = _speedSamples.isEmpty
+          ? 0.0
+          : _speedSamples.reduce((a, b) => a + b) / _speedSamples.length;
+      if (avgSpeed > _peakSpeed) _peakSpeed = avgSpeed;
+    });
+  }
+
+  void _stopSpeedTimer() {
+    _speedTimer?.cancel();
+    _speedTimer = null;
   }
 
   double _avgSpeed() {
