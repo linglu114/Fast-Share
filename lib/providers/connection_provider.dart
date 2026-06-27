@@ -212,13 +212,26 @@ class ConnectionNotifier extends Notifier<Map<String, bool>> {
     final offer = ref.read(pendingOfferProvider);
     if (offer == null) return;
     Logger.log('[CN] acceptPendingOffer: transferId=${offer.transferId}');
-    final savePath = ref.read(downloadPathProvider);
+    final basePath = ref.read(downloadPathProvider);
+
+    // 文件夹传输：从文件相对路径提取顶层文件夹名，确定实际存储路径
+    // 引擎在 basePath 下重建相对路径，所以传输文件夹的实际位置是 basePath/顶层文件夹名/
+    String taskSavePath = basePath;
+    if (offer.folderMode && offer.files.isNotEmpty) {
+      final firstRel = offer.files.first['relativePath'] as String? ?? '';
+      if (firstRel.isNotEmpty) {
+        final parts = firstRel.split(RegExp(r'[/\\]'));
+        if (parts.length > 1) {
+          taskSavePath = '$basePath${Platform.pathSeparator}${parts.first}';
+        }
+      }
+    }
 
     final tempDir = (await getTemporaryDirectory()).path;
     _manager?.acceptTransfer(
       offer.senderDeviceId,
       offer.transferId,
-      savePath,
+      basePath, // 引擎使用根目录重建相对路径
       senderDeviceName: offer.senderDeviceName,
       batchName: offer.batchName,
       totalSize: offer.totalSize,
@@ -244,7 +257,7 @@ class ConnectionNotifier extends Notifier<Map<String, bool>> {
           .toList(),
       folderMode: offer.folderMode,
       status: TransferStatus.transferring,
-      savePath: savePath,
+      savePath: taskSavePath,
     );
     ref.read(receiveTransferProvider.notifier).state = task;
     // pendingOffer 延迟到 transfer_started 事件时清除，
@@ -371,20 +384,6 @@ class ConnectionNotifier extends Notifier<Map<String, bool>> {
       ForegroundServiceManager().stop();
     }
     if (success) task.bytesTransferred = task.totalSize;
-
-    // 文件夹传输：从相对路径提取顶层文件夹名，修正 savePath
-    // 避免历史页展开时显示整个下载目录而非实际传输的文件夹
-    String historySavePath = task.savePath;
-    if (task.folderMode && task.files.isNotEmpty) {
-      final firstRel = task.files.first.relativePath;
-      final topFolder = firstRel.split(RegExp(r'[/\\]')).first;
-      if (topFolder.isNotEmpty && !firstRel.contains('/') && !firstRel.contains('\\')) {
-        // 单层文件（无子目录）→ savePath 已经是正确目录
-      } else if (topFolder.isNotEmpty) {
-        historySavePath = '${task.savePath}${Platform.pathSeparator}$topFolder';
-      }
-    }
-    task.savePath = historySavePath;
     ref.read(receiveTransferProvider.notifier).state = task.clone();
 
     try {
