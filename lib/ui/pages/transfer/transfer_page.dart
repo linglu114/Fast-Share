@@ -11,11 +11,28 @@ import '../../../providers/discovery_provider.dart';
 import '../../../util/format.dart';
 
 /// 传输页 (需求 §9-§12, §15)
-class TransferPage extends ConsumerWidget {
+class TransferPage extends ConsumerStatefulWidget {
   const TransferPage({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<TransferPage> createState() => _TransferPageState();
+}
+
+class _TransferPageState extends ConsumerState<TransferPage> {
+  final _expandedIds = <String>{};
+
+  void _toggleExpanded(String transferId) {
+    setState(() {
+      if (_expandedIds.contains(transferId)) {
+        _expandedIds.remove(transferId);
+      } else {
+        _expandedIds.add(transferId);
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final tasks = ref.watch(transferQueueProvider);
     final activeTask = ref.watch(activeTransferProvider);
     final receiveTask = ref.watch(receiveTransferProvider);
@@ -57,7 +74,12 @@ class TransferPage extends ConsumerWidget {
                         style: Theme.of(context).textTheme.titleSmall,
                       ),
                       const SizedBox(height: 8),
-                      ...tasks.map((t) => _QueueItem(key: ValueKey(t.transferId), task: t, ref: ref)),
+                      ...tasks.map((t) => _QueueItem(
+                        task: t,
+                        ref: ref,
+                        isExpanded: _expandedIds.contains(t.transferId),
+                        onToggle: () => _toggleExpanded(t.transferId),
+                      )),
                     ],
                   ],
                 ),
@@ -566,24 +588,21 @@ class _ReceiveTransferCard extends StatelessWidget {
   Widget _buildStatusChip(TransferStatus status) => _sharedStatusChip(status);
 }
 
-class _QueueItem extends StatefulWidget {
+class _QueueItem extends StatelessWidget {
   final TransferTask task;
   final WidgetRef ref;
-  const _QueueItem({super.key, required this.task, required this.ref});
-
-  @override
-  State<_QueueItem> createState() => _QueueItemState();
-}
-
-class _QueueItemState extends State<_QueueItem> {
-  bool _expanded = false;
+  final bool isExpanded;
+  final VoidCallback onToggle;
+  const _QueueItem({
+    required this.task,
+    required this.ref,
+    required this.isExpanded,
+    required this.onToggle,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final task = widget.task;
-    final ref = widget.ref;
     final cs = Theme.of(context).colorScheme;
-
     return Card(
       child: Column(
         children: [
@@ -602,9 +621,9 @@ class _QueueItemState extends State<_QueueItem> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 IconButton(
-                  icon: Icon(_expanded ? Icons.expand_less : Icons.expand_more, size: 20),
-                  tooltip: _expanded ? '收起' : '展开文件列表',
-                  onPressed: () => setState(() => _expanded = !_expanded),
+                  icon: Icon(isExpanded ? Icons.expand_less : Icons.expand_more, size: 20),
+                  tooltip: isExpanded ? '收起' : '展开文件列表',
+                  onPressed: onToggle,
                 ),
                 IconButton(
                   icon: const Icon(Icons.close, size: 18),
@@ -617,9 +636,9 @@ class _QueueItemState extends State<_QueueItem> {
                 ),
               ],
             ),
-            onTap: () => setState(() => _expanded = !_expanded),
+            onTap: onToggle,
           ),
-          if (_expanded && task.files.isNotEmpty) ...[
+          if (isExpanded && task.files.isNotEmpty) ...[
             const Divider(height: 1),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
