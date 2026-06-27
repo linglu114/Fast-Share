@@ -349,7 +349,10 @@ class ConnectionNotifier extends Notifier<Map<String, bool>> {
         });
         break;
       case 'transfer_complete':
-        _onReceiveComplete(rtask, event['success'] as bool? ?? true);
+        _onReceiveComplete(rtask, true);
+        break;
+      case 'transfer_cancelled':
+        _onReceiveComplete(rtask, false, cancelled: true);
         break;
       case 'error':
         _onReceiveComplete(rtask, false);
@@ -357,8 +360,9 @@ class ConnectionNotifier extends Notifier<Map<String, bool>> {
     }
   }
 
-  Future<void> _onReceiveComplete(TransferTask task, bool success) async {
-    task.status = success ? TransferStatus.completed : TransferStatus.failed;
+  Future<void> _onReceiveComplete(TransferTask task, bool success, {bool cancelled = false}) async {
+    task.status = cancelled ? TransferStatus.cancelled
+        : success ? TransferStatus.completed : TransferStatus.failed;
     // 没有活跃发送时停止前台服务
     if (ref.read(activeTransferProvider) == null) {
       ForegroundServiceManager().stop();
@@ -375,10 +379,10 @@ class ConnectionNotifier extends Notifier<Map<String, bool>> {
         batchName: task.batchName,
         totalSize: task.totalSize,
         fileCount: task.fileCount,
-        success: success,
+        success: false,
         peakSpeed: task.peakSpeed,
         avgSpeed: task.avgSpeed,
-        status: success ? 'completed' : 'failed',
+        status: cancelled ? 'cancelled' : (success ? 'completed' : 'failed'),
         timestamp: DateTime.now(),
         savePath: task.savePath,
       ));

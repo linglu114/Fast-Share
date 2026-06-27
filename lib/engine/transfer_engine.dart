@@ -427,6 +427,11 @@ class TransferSession {
     try {
       _socket?.close();
     } catch (_) {}
+    // 通知 UI 传输已取消（必须在 socket 关闭之后，避免 onDone 的 error 事件覆盖）
+    _sendEvent('transfer_cancelled', {
+      'transferId': transferId,
+      'byUser': false,
+    });
     _cleanupCacheFiles();
   }
 
@@ -1124,8 +1129,8 @@ class TransferSession {
         });
       },
       onDone: () {
-        Logger.log('[ENG] socket listener onDone, completed=$_completed');
-        if (!_completed) {
+        Logger.log('[ENG] socket listener onDone, completed=$_completed cancelled=$_cancelled');
+        if (!_completed && !_cancelled) {
           _sendEvent('error', {
             'transferId': transferId,
             'message': 'Connection closed by receiver',

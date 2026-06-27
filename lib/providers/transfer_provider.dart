@@ -143,6 +143,9 @@ class TransferNotifier extends Notifier<void> {
       case 'transfer_complete':
         _onTransferComplete(data);
         break;
+      case 'transfer_cancelled':
+        _onTransferCancelled(data);
+        break;
       case 'request_chunk':
         _onRequestChunk(data);
         break;
@@ -402,6 +405,36 @@ class TransferNotifier extends Notifier<void> {
         }
         return task?.clone();
       });
+    }
+  }
+
+  void _onTransferCancelled(Map<String, dynamic> data) {
+    final transferId = data['transferId'] as String?;
+    if (transferId == null) return;
+    final active = ref.read(activeTransferProvider);
+    if (active?.transferId != transferId) return;
+
+    ref.read(activeTransferProvider.notifier).update((task) {
+      if (task != null) task.status = TransferStatus.cancelled;
+      return task?.clone();
+    });
+
+    if (active != null) {
+      _saveHistory(active, 'cancelled');
+    }
+
+    // 从队列中移除
+    final queue = ref.read(transferQueueProvider);
+    ref.read(transferQueueProvider.notifier).state =
+        queue.where((t) => t.transferId != transferId).toList();
+
+    if (ref.read(transferQueueProvider).isEmpty) {
+      ContentUriReader.closeAllContentStreams();
+      ForegroundServiceManager().stop();
+      _engineIsolate?.then((i) => i.kill());
+      _engineIsolate = null;
+      _engineSendPort = null;
+      _ensureEngineReady = null;
     }
   }
 

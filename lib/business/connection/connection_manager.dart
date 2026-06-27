@@ -671,7 +671,7 @@ class ConnectionManager {
       if (transferId != null) {
         _shutdownReceiveEngine(deviceId, transferId);
         _receiveEventController.add({
-          'type': 'error',
+          'type': 'transfer_cancelled',
           'transferId': transferId,
           'deviceId': deviceId,
           'message': 'Transfer cancelled by sender',
