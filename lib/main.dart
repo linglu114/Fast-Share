@@ -96,25 +96,28 @@ Future<String?> _getDeviceName() async {
   return null;
 }
 
-/// Android 存储权限 — 按 API 级别精确适配，避免过度授权触发系统警告
+/// Android 存储写入权限
 ///
-/// API < 29 (Android 9-): 仍需 READ/WRITE_EXTERNAL_STORAGE
-/// API 29-32 (Android 10-12): 分区存储已生效，写入 Download 目录无需权限
-/// API 33+ (Android 13+): 使用 READ_MEDIA_* 细粒度权限
+/// API < 30 (Android ≤9): 传统 READ/WRITE_EXTERNAL_STORAGE
+/// API ≥ 30 (Android 11+): MANAGE_EXTERNAL_STORAGE
+///   Scoped Storage 保护 Download 等共享目录，必须"所有文件访问"权限
 Future<void> _requestStoragePermissions() async {
   final sdkInt = _parseAndroidSdkInt();
 
-  if (sdkInt < 29) {
+  if (sdkInt >= 30) {
+    // Android 11+：MANAGE_EXTERNAL_STORAGE 才能在 Download 下建目录/写文件
+    final status = await Permission.manageExternalStorage.status;
+    if (!status.isGranted) {
+      await Permission.manageExternalStorage.request();
+    }
+  } else if (sdkInt < 29) {
     // Android 9 及以下：传统存储权限
     final status = await Permission.storage.status;
     if (!status.isGranted) {
       await Permission.storage.request();
     }
-  } else if (sdkInt >= 33) {
-    // Android 13+：无需在启动时申请存储权限，file_picker 自行处理读权限，
-    // 写入 Download 目录由分区存储机制保证无需额外权限
   }
-  // API 29-32：分区存储下写入 Download 目录已无需权限，无需请求
+  // API 29 (Android 10): requestLegacyExternalStorage 豁免
 }
 
 /// Android 13+ 通知权限（前台服务必需）
