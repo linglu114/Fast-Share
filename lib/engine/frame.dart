@@ -105,6 +105,14 @@ class FlpFrame {
       throw FlpFrameException('Payload length exceeds max: $length');
     }
 
+    // 防止帧头声明的载荷长度超出实际可用字节（截断帧 / 网络损坏）
+    final totalFrameLen = headerLength + length + checksumLength;
+    if (totalFrameLen > bytes.length) {
+      throw FlpFrameException(
+          'Truncated frame: declared $length bytes payload, '
+          'but only ${bytes.length - headerLength - checksumLength} available');
+    }
+
     // Copy payload via bulk setAll (much faster than byte-by-byte)
     final payload = Uint8List(length);
     payload.setAll(0, Uint8List.sublistView(bytes, headerLength, headerLength + length));

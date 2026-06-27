@@ -364,6 +364,12 @@ class ReceiveEngine {
   void _handleFileData(FlpFrame frame) {
     if (_cancelled) return;
 
+    // FILE_DATA 头部至少 48 字节（16 transferId + 16 fileId + 4 chunkIndex + 8 offset + 4 dataLength）
+    if (frame.payload.length < 48) {
+      Logger.log('[RECV] _handleFileData: truncated payload (${frame.payload.length} < 48)');
+      return;
+    }
+
     try {
       final buffer = ByteData.sublistView(frame.payload);
 
@@ -372,6 +378,12 @@ class ReceiveEngine {
 
       // dataLength (4 B at byte 44)
       final dataLength = buffer.getUint32(44, Endian.big);
+
+      // 校验数据区不超出载荷边界
+      if (48 + dataLength > frame.payload.length) {
+        Logger.log('[RECV] _handleFileData: dataLength $dataLength exceeds payload (${frame.payload.length - 48} available)');
+        return;
+      }
 
       // Fast fileId lookup: if last file matches, skip UUID parsing entirely.
       // For single-file transfers (the common case), this avoids 3720+ string allocs.
