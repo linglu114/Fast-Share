@@ -517,13 +517,26 @@ class TransferNotifier extends Notifier<void> {
     final transferId = _uuid.v4();
     final settings = ref.read(settingsRepositoryProvider);
 
-    // 创建任务 — batchName 统一用文件数量
+    // 创建任务 — 单文件显示文件名，多文件显示数量
     final count = resolvedContentFiles.isNotEmpty
         ? resolvedContentFiles.length
         : finalPaths.length;
-    final batchName = finalFolderMode
-        ? '${count} 个文件（文件夹）'
-        : '$count 个文件';
+    final String batchName;
+    if (finalFolderMode) {
+      batchName = '${count} 个文件（文件夹）';
+    } else if (count == 1) {
+      // 单文件：显示文件名
+      if (resolvedContentFiles.isNotEmpty) {
+        final name = resolvedContentFiles.first['name'] as String? ?? '';
+        batchName = name.split(RegExp(r'[/\\]')).last;
+      } else if (finalPaths.isNotEmpty) {
+        batchName = finalPaths.first.split(RegExp(r'[/\\]')).last;
+      } else {
+        batchName = '1 个文件';
+      }
+    } else {
+      batchName = '$count 个文件';
+    }
     final task = TransferTask(
       transferId: transferId,
       senderDeviceId: settings.deviceId ?? 'unknown',

@@ -252,7 +252,14 @@ class ConnectionNotifier extends Notifier<Map<String, bool>> {
       senderDeviceId: offer.senderDeviceId,
       targetDeviceId: ref.read(localDeviceProvider).deviceId,
       peerDeviceName: offer.senderDeviceName ?? offer.senderDeviceId,
-      batchName: '${offer.fileCount} 个文件',
+      batchName: offer.fileCount == 1 && !offer.folderMode
+          ? ((offer.files.isNotEmpty
+                  ? offer.files.first['relativePath'] as String?
+                  : null) ??
+              '文件传输')
+              .split(RegExp(r'[/\\]'))
+              .last
+          : '${offer.fileCount} 个文件',
       totalSize: offer.totalSize,
       fileCount: offer.fileCount,
       files: offer.files
