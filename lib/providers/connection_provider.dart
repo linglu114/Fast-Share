@@ -246,7 +246,8 @@ class ConnectionNotifier extends Notifier<Map<String, bool>> {
       savePath: savePath,
     );
     ref.read(receiveTransferProvider.notifier).state = task;
-    ref.read(pendingOfferProvider.notifier).state = null;
+    // pendingOffer 延迟到 transfer_started 事件时清除，
+    // 防止引擎启动失败时 UI 失去反馈
   }
 
   void rejectPendingOffer() {
@@ -269,6 +270,7 @@ class ConnectionNotifier extends Notifier<Map<String, bool>> {
 
     switch (type) {
       case 'transfer_started':
+        ref.read(pendingOfferProvider.notifier).state = null;
         break;
       case 'transfer_paused':
         ref.read(receiveTransferProvider.notifier).update((task) {

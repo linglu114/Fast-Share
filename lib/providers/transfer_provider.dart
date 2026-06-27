@@ -191,13 +191,15 @@ class TransferNotifier extends Notifier<void> {
       if (task.files.isNotEmpty) {
         task.fileCount = task.files.length; // 文件夹递归后的真实数量
       }
-      // 同步更新队列中的同一条目
+      // 同步更新队列中的同一条目（先 clone 再修改，遵守 Riverpod 不可变性契约）
       final queue = ref.read(transferQueueProvider);
       final idx = queue.indexWhere((t) => t.transferId == transferId);
       if (idx >= 0) {
-        queue[idx].totalSize = totalSize;
-        queue[idx].fileCount = task.fileCount;
-        ref.read(transferQueueProvider.notifier).state = [...queue];
+        final updatedQueue = queue.toList();
+        updatedQueue[idx] = queue[idx].clone()
+          ..totalSize = totalSize
+          ..fileCount = task.fileCount;
+        ref.read(transferQueueProvider.notifier).state = updatedQueue;
       }
       return task.clone();
     });
@@ -349,16 +351,15 @@ class TransferNotifier extends Notifier<void> {
     }
 
     // 队列为空时停止前台服务（如有并发接收，其进度事件会自动重启）
+    // 同时清理 Engine Isolate，避免误杀正在处理的其它传输
     if (ref.read(transferQueueProvider).isEmpty) {
       ForegroundServiceManager().stop();
+      ContentUriReader.closeAllContentStreams();
+      _engineIsolate?.then((i) => i.kill());
+      _engineIsolate = null;
+      _engineSendPort = null;
+      _ensureEngineReady = null;
     }
-
-    // 关闭 content URI 通道，销毁 Engine Isolate
-    ContentUriReader.closeAllContentStreams();
-    _engineIsolate?.then((i) => i.kill());
-    _engineIsolate = null;
-    _engineSendPort = null;
-    _ensureEngineReady = null;
   }
 
   void _onError(Map<String, dynamic> data) {

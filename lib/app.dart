@@ -436,6 +436,7 @@ class _CriticalBatteryDialogState extends State<_CriticalBatteryDialog> {
   void initState() {
     super.initState();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
       if (_secondsLeft > 0) {
         setState(() => _secondsLeft--);
       } else {

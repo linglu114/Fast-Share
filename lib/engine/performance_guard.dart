@@ -132,7 +132,9 @@ class SlidingWindow {
       // _wakeNormalWaiters 已预占 _pendingBytes 且通过空间检查，
       // 直接返回即可（不再回到循环顶部判额度，否则重复计数死锁）。
       // 防护：如果 cancel 在 wake 之后、return 之前触发——
+      // 释放 _wakeNormalWaiters 预占的额度，防止会计泄漏导致窗口永久缩小
       if (_cancelled) {
+        _pendingBytes -= waiter.bytes;
         throw StateError('SlidingWindow cancelled');
       }
       return;

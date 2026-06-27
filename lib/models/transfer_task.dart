@@ -52,6 +52,22 @@ class FileTransferItem {
 
   /// 进度百分比
   double get progress => size > 0 ? bytesTransferred / size : 0.0;
+
+  /// 深拷贝，避免共享对象变异
+  FileTransferItem clone() {
+    return FileTransferItem(
+      fileId: fileId,
+      relativePath: relativePath,
+      size: size,
+      mtime: mtime,
+      bytesTransferred: bytesTransferred,
+      chunkSize: chunkSize,
+      status: status,
+      errorMessage: errorMessage,
+      retryCount: retryCount,
+      receivedRanges: receivedRanges.map((r) => Range(r.start, r.end)).toList(),
+    );
+  }
 }
 
 /// 传输任务
@@ -111,7 +127,7 @@ class TransferTask {
       batchName: batchName,
       totalSize: totalSize,
       fileCount: fileCount,
-      files: List<FileTransferItem>.from(files),
+      files: files.map((f) => f.clone()).toList(),
       folderMode: folderMode,
       status: status,
       mode: mode,

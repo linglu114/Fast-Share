@@ -189,15 +189,13 @@ class ConnectionManager {
               _dispatchFrame(deviceId, frame);
             });
 
-            // Transfer onRawFrame hook from discovery to engine connection for active transfers
+            // Transfer onRawFrame hook to engine connection for active transfers.
+            // Keep the discovery connection hook alive — null-ing it races with
+            // FILE_DATA frames that may still arrive on the discovery socket.
             final discoveryConn = _tcpConns[deviceId];
-            for (final tid in _receiverDevice.keys.where((k) => _receiverDevice[k] == deviceId).toList()) {
-              if (discoveryConn != null && discoveryConn.onRawFrame != null) {
-                // Move the hook to the engine connection (where FILE_DATA/FILE_META actually arrive)
-                conn.onRawFrame = discoveryConn.onRawFrame;
-                discoveryConn.onRawFrame = null;
-                Logger.log('[CM] handleIncomingConnection: moved onRawFrame hook to engine conn for transferId=$tid');
-              }
+            if (discoveryConn != null && discoveryConn.onRawFrame != null) {
+              conn.onRawFrame = discoveryConn.onRawFrame;
+              Logger.log('[CM] handleIncomingConnection: set onRawFrame on engine conn for deviceId=$deviceId');
             }
           } else {
             Logger.log('[CM] handleIncomingConnection: discovery connection for $deviceId');

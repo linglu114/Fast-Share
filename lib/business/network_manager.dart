@@ -46,16 +46,23 @@ class NetworkManager {
     return null;
   }
 
-  /// 判断两个 IP 是否在同一 /24 子网
+  /// 判断两个 IP 是否在同一 RFC 1918 子网
   bool _sameSubnet(String ip1, String ip2) {
     try {
       final parts1 = ip1.split('.');
       final parts2 = ip2.split('.');
       if (parts1.length != 4 || parts2.length != 4) return false;
-      for (var i = 0; i < 3; i++) {
-        if (parts1[i] != parts2[i]) return false;
-      }
-      return true;
+      final a1 = int.parse(parts1[0]), a2 = int.parse(parts2[0]);
+      final b1 = int.parse(parts1[1]), b2 = int.parse(parts2[1]);
+
+      // 10.0.0.0/8
+      if (a1 == 10 && a2 == 10) return true;
+      // 172.16.0.0/12
+      if (a1 == 172 && a2 == 172 && b1 >= 16 && b1 <= 31 && b2 >= 16 && b2 <= 31) return true;
+      // 192.168.0.0/16
+      if (a1 == 192 && a2 == 192 && b1 == 168 && b2 == 168) return true;
+
+      return false;
     } catch (_) {
       return false;
     }

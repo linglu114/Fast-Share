@@ -227,21 +227,25 @@ class DiscoveryService {
     _broadcastAddresses = addrs;
   }
 
-  /// 根据 IP 计算子网广播地址（假设 /24）
+  /// 根据 IP 计算子网广播地址（RFC 1918 默认掩码）
   static String? _subnetBroadcast(String ip) {
     final parts = ip.split('.');
     if (parts.length != 4) return null;
-    final third = int.tryParse(parts[2]);
-    if (third == null) return null;
+    final first = int.tryParse(parts[0]) ?? 0;
+    final second = int.tryParse(parts[1]) ?? 0;
+    if (first == 0) return null;
 
-    if (ip.startsWith('192.168.') || ip.startsWith('10.')) {
-      return '${parts[0]}.${parts[1]}.$third.255';
+    // 10.0.0.0/8 → 10.255.255.255
+    if (first == 10) {
+      return '10.255.255.255';
     }
-    if (ip.startsWith('172.')) {
-      final second = int.tryParse(parts[1]) ?? 0;
-      if (second >= 16 && second <= 31) {
-        return '${parts[0]}.${parts[1]}.$third.255';
-      }
+    // 172.16.0.0/12 → 172.31.255.255
+    if (first == 172 && second >= 16 && second <= 31) {
+      return '172.31.255.255';
+    }
+    // 192.168.0.0/16 → 192.168.255.255
+    if (first == 192 && second == 168) {
+      return '192.168.255.255';
     }
     return null;
   }

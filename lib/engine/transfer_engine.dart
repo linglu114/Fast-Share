@@ -191,6 +191,7 @@ class TransferSession {
   final Map<String, Completer<Uint8List>> _chunkWaiters = {};
   final Map<String, bool> _fileCompleted = {};
   final Set<String> _retransferring = {}; // 防止并发重传同一文件
+  final Map<String, List<List<int>>> _pendingNackRanges = {}; // 重传期间排队的新NACK范围
   Completer<void>? _allFilesDone;
   Completer<void>? _acceptReceived;
   bool _acceptRejected = false;
@@ -1379,8 +1380,12 @@ class TransferSession {
   void _resendRange(String fileId, int start, int end) {
     final file = _files.where((f) => f.fileId == fileId).firstOrNull;
     if (file == null) return;
-    // Guard against concurrent retransfers of the same file from duplicate NACKs
-    if (_retransferring.contains(fileId)) return;
+    // 如果该文件正在重传中，将新 NACK 的范围排队，
+    // 等当前重传完成后一并处理，防止静默丢弃
+    if (_retransferring.contains(fileId)) {
+      _pendingNackRanges.putIfAbsent(fileId, () => []).add([start, end]);
+      return;
+    }
     // 简化：重新发送整个文件（后续可优化为只重发 missingRanges）
     file.retries++;
     if (file.retries <= retryCount) {
@@ -1388,6 +1393,17 @@ class TransferSession {
       _resetFileProgress(file);
       _transferSingleFile(file).then((_) {
         _retransferring.remove(fileId);
+        // 处理重传期间排队的新 NACK 范围
+        final pending = _pendingNackRanges.remove(fileId);
+        if (pending != null && pending.isNotEmpty && file.retries < retryCount) {
+          file.retries++;
+          _retransferring.add(fileId);
+          _resetFileProgress(file);
+          _transferSingleFile(file).then((_) {
+            _retransferring.remove(fileId);
+            _pendingNackRanges.remove(fileId);
+          });
+        }
       });
     }
   }
