@@ -205,6 +205,7 @@ class TransferSession {
   final List<double> _speedSamples = [];
   int _lastSampleTime = 0;
   int _lastSampleBytes = 0;
+  int _lastActiveTime = 0; // 最后一次有字节传输的时间戳
 
   // 令牌桶
   TokenBucket? _tokenBucket;
@@ -1391,34 +1392,48 @@ class TransferSession {
   // ═══════════════════════════════════════════════════════════
 
   void _startSpeedTimer() {
-    _lastSampleTime = DateTime.now().millisecondsSinceEpoch;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    _lastSampleTime = now;
     _lastSampleBytes = _bytesTransferred;
+    _lastActiveTime = now;
     _speedTimer?.cancel();
     _speedTimer = Timer.periodic(const Duration(milliseconds: 1000), (_) {
       if (_cancelled) return;
       final now = DateTime.now().millisecondsSinceEpoch;
       final deltaMs = now - _lastSampleTime;
-      double speed = 0;
-      if (deltaMs > 0) {
-        final deltaBytes = _bytesTransferred - _lastSampleBytes;
-        speed = deltaBytes / (deltaMs / 1000.0);
+      if (deltaMs <= 0) return;
+
+      final deltaBytes = _bytesTransferred - _lastSampleBytes;
+
+      // 始终推进时间基准，避免空闲时间累积到下一个活跃样本中
+      _lastSampleTime = now;
+      _lastSampleBytes = _bytesTransferred;
+
+      if (deltaBytes > 0) {
+        // 只在实际有数据传输时记录速度样本
+        _lastActiveTime = now;
+        final speed = deltaBytes / (deltaMs / 1000.0);
         _speedSamples.add(speed);
         while (_speedSamples.length > 6) {
           _speedSamples.removeAt(0);
         }
+        final avgSpeed = _speedSamples.isEmpty
+            ? 0.0
+            : _speedSamples.reduce((a, b) => a + b) / _speedSamples.length;
+        if (avgSpeed > _peakSpeed) _peakSpeed = avgSpeed;
       }
-      _lastSampleTime = now;
-      _lastSampleBytes = _bytesTransferred;
-      final avgSpeed = _speedSamples.isEmpty
-          ? 0.0
-          : _speedSamples.reduce((a, b) => a + b) / _speedSamples.length;
-      if (avgSpeed > _peakSpeed) _peakSpeed = avgSpeed;
+
+      // 超过 3 秒无数据传输 → 清零速度窗口
+      if (_speedSamples.isNotEmpty && now - _lastActiveTime > 3000) {
+        _speedSamples.clear();
+      }
     });
   }
 
   void _stopSpeedTimer() {
     _speedTimer?.cancel();
     _speedTimer = null;
+    _speedSamples.clear();
   }
 
   double _avgSpeed() {
