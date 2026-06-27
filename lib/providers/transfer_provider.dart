@@ -250,11 +250,6 @@ class TransferNotifier extends Notifier<void> {
     final active = ref.read(activeTransferProvider);
     if (active?.transferId != transferId) return;
 
-    // 暂停期间冻结进度/速度显示：接收端 TCP 缓冲中的 in-flight 数据仍会
-    // 回 ACK，Engine 已在 _notifyProgress/_speedTimer 上加了暂停闸门，此处
-    // 再兜一道——避免任何残留/竞态事件让点击暂停后进度条继续跳动。
-    if (active?.status == TransferStatus.paused) return;
-
     ref.read(activeTransferProvider.notifier).update((task) {
       if (task == null) return null;
       final newBytes = data['bytesTransferred'] as int?;
