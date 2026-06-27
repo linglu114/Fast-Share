@@ -53,6 +53,9 @@ dependencies:
   # 权限请求 (Android)
   permission_handler: ^11.3.0
 
+  # URL 启动器
+  url_launcher: ^6.3.0
+
   # UI 图标
   cupertino_icons: ^1.0.8
 

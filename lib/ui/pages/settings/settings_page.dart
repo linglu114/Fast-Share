@@ -1,6 +1,7 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../../providers/settings_provider.dart';
 import '../../../storage/settings_repository.dart';
 import '../../../storage/trusted_device_repository.dart';
@@ -513,26 +514,36 @@ void _showAboutDialog(BuildContext context) {
           Text('关于瞬息'),
         ],
       ),
-      content: const Column(
+      content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
+          const Text(
             '瞬息 (FastShare)',
             style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
           ),
-          SizedBox(height: 4),
-          Text('版本 1.0.0'),
-          SizedBox(height: 12),
-          Text(
+          const SizedBox(height: 4),
+          const Text('版本 1.0.0'),
+          const SizedBox(height: 12),
+          const Text(
             '基于 FLP 协议 (v1.2) 的局域网文件传输工具。\n'
             '支持 Android ↔ Windows 高速互传。',
             style: TextStyle(fontSize: 13),
           ),
-          SizedBox(height: 12),
-          SelectableText(
-            'https://github.com/linglu114/Fast-Share',
-            style: TextStyle(fontSize: 12, color: Colors.blue),
+          const SizedBox(height: 12),
+          GestureDetector(
+            onTap: () => launchUrl(
+              Uri.parse('https://github.com/linglu114/Fast-Share'),
+              mode: LaunchMode.externalApplication,
+            ),
+            child: const Text(
+              'https://github.com/linglu114/Fast-Share',
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.blue,
+                decoration: TextDecoration.underline,
+              ),
+            ),
           ),
         ],
       ),
