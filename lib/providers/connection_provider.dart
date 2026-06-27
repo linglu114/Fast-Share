@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
@@ -370,6 +371,20 @@ class ConnectionNotifier extends Notifier<Map<String, bool>> {
       ForegroundServiceManager().stop();
     }
     if (success) task.bytesTransferred = task.totalSize;
+
+    // 文件夹传输：从相对路径提取顶层文件夹名，修正 savePath
+    // 避免历史页展开时显示整个下载目录而非实际传输的文件夹
+    String historySavePath = task.savePath;
+    if (task.folderMode && task.files.isNotEmpty) {
+      final firstRel = task.files.first.relativePath;
+      final topFolder = firstRel.split(RegExp(r'[/\\]')).first;
+      if (topFolder.isNotEmpty && !firstRel.contains('/') && !firstRel.contains('\\')) {
+        // 单层文件（无子目录）→ savePath 已经是正确目录
+      } else if (topFolder.isNotEmpty) {
+        historySavePath = '${task.savePath}${Platform.pathSeparator}$topFolder';
+      }
+    }
+    task.savePath = historySavePath;
     ref.read(receiveTransferProvider.notifier).state = task.clone();
 
     try {
