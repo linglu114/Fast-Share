@@ -13,8 +13,6 @@ import '../platform/foreground_service_manager.dart';
 import '../platform/content_uri_reader.dart';
 import 'settings_provider.dart';
 import 'connection_provider.dart';
-import '../models/history_record.dart';
-import '../storage/history_repository.dart';
 
 /// 传输队列 Provider
 final transferQueueProvider = StateProvider<List<TransferTask>>((ref) => []);
@@ -231,9 +229,6 @@ class TransferNotifier extends Notifier<void> {
       return task.clone();
     });
 
-    if (phase == 'rejected' && active != null) {
-      _saveHistory(active, 'rejected');
-    }
   }
 
   void _onModeChange(Map<String, dynamic> data) {
@@ -304,30 +299,6 @@ class TransferNotifier extends Notifier<void> {
     });
   }
 
-  Future<void> _saveHistory(TransferTask task, String status) async {
-    try {
-      final repo = HistoryRepository();
-      await repo.insert(HistoryRecord(
-        transferId: task.transferId,
-        deviceId: task.targetDeviceId,
-        deviceName: task.peerDeviceName ?? task.targetDeviceId,
-        batchName: task.batchName,
-        totalSize: task.totalSize,
-        fileCount: task.fileCount,
-        success: status == 'completed',
-        errorMessage: task.errorMessage,
-        peakSpeed: task.peakSpeed,
-        avgSpeed: task.avgSpeed,
-        status: status,
-        timestamp: DateTime.now(),
-        savePath: task.savePath,
-        folderMode: task.folderMode,
-      ));
-    } catch (_) {
-      // 历史记录写入失败不阻断主流程
-    }
-  }
-
   void _onTransferComplete(Map<String, dynamic> data) {
     final transferId = data['transferId'] as String;
     final active = ref.read(activeTransferProvider);
@@ -340,10 +311,6 @@ class TransferNotifier extends Notifier<void> {
         }
         return task?.clone();
       });
-
-      if (active != null) {
-        _saveHistory(active, 'completed');
-      }
 
       // 从队列中移除
       final queue = ref.read(transferQueueProvider);
@@ -375,11 +342,6 @@ class TransferNotifier extends Notifier<void> {
         }
         return task?.clone();
       });
-      final active = ref.read(activeTransferProvider);
-      if (active?.transferId == transferId && active != null) {
-        _saveHistory(active, 'failed');
-      }
-
       // Remove from queue
       final queue = ref.read(transferQueueProvider);
       ref.read(transferQueueProvider.notifier).state =
@@ -420,10 +382,6 @@ class TransferNotifier extends Notifier<void> {
       if (task != null) task.status = TransferStatus.cancelled;
       return task?.clone();
     });
-
-    if (active != null) {
-      _saveHistory(active, 'cancelled');
-    }
 
     // 从队列中移除
     final queue = ref.read(transferQueueProvider);
@@ -577,13 +535,7 @@ class TransferNotifier extends Notifier<void> {
       files: [],
       folderMode: finalFolderMode,
       status: TransferStatus.scanning,
-      savePath: _resolveSavePath(
-        ref.read(downloadPathProvider),
-        finalFolderMode,
-        count,
-        finalPaths,
-        resolvedContentFiles,
-      ),
+      savePath: ref.read(downloadPathProvider),
     );
 
     // 放入队列
@@ -654,9 +606,6 @@ class TransferNotifier extends Notifier<void> {
     // 从活跃任务中移除
     final active = ref.read(activeTransferProvider);
     if (active?.transferId == transferId) {
-      if (active != null) {
-        _saveHistory(active, 'cancelled');
-      }
       ref.read(activeTransferProvider.notifier).state = null;
     }
 
@@ -702,22 +651,4 @@ class TransferNotifier extends Notifier<void> {
     };
   }
 
-  /// 确定发送端 savePath 应指向的实际路径
-  /// - 单文件 → 文件路径
-  /// - 文件夹 → 文件夹路径
-  /// - 多文件 → 回退为下载目录
-  String _resolveSavePath(String basePath, bool folderMode, int count,
-      List<String> paths, List<Map<String, dynamic>> contentFiles) {
-    if (folderMode && paths.isNotEmpty) {
-      return paths.first;
-    }
-    if (!folderMode && count == 1) {
-      if (paths.isNotEmpty) return paths.first;
-      if (contentFiles.isNotEmpty) {
-        final realPath = contentFiles.first['realPath'] as String?;
-        if (realPath != null && realPath.isNotEmpty) return realPath;
-      }
-    }
-    return basePath;
-  }
 }
