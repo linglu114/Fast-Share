@@ -214,15 +214,22 @@ class ConnectionNotifier extends Notifier<Map<String, bool>> {
     Logger.log('[CN] acceptPendingOffer: transferId=${offer.transferId}');
     final basePath = ref.read(downloadPathProvider);
 
-    // 文件夹传输：从文件相对路径提取顶层文件夹名，确定实际存储路径
-    // 引擎在 basePath 下重建相对路径，所以传输文件夹的实际位置是 basePath/顶层文件夹名/
+    // 确定历史记录中 savePath 应指向的实际路径
+    // - 单文件传输（非文件夹模式、1 个文件）→ 指向具体文件
+    // - 文件夹传输 → 指向顶层文件夹名（引擎在 basePath 下重建相对路径）
+    // - 多文件传输 → 保持 basePath（无法归纳到单个文件/文件夹）
     String taskSavePath = basePath;
-    if (offer.folderMode && offer.files.isNotEmpty) {
+    if (offer.files.isNotEmpty) {
       final firstRel = offer.files.first['relativePath'] as String? ?? '';
       if (firstRel.isNotEmpty) {
-        final parts = firstRel.split(RegExp(r'[/\\]'));
-        if (parts.length > 1) {
-          taskSavePath = '$basePath${Platform.pathSeparator}${parts.first}';
+        if (!offer.folderMode && offer.fileCount == 1) {
+          // 单文件 → basePath/文件名
+          taskSavePath = '$basePath${Platform.pathSeparator}$firstRel';
+        } else if (offer.folderMode) {
+          final parts = firstRel.split(RegExp(r'[/\\]'));
+          if (parts.length > 1) {
+            taskSavePath = '$basePath${Platform.pathSeparator}${parts.first}';
+          }
         }
       }
     }

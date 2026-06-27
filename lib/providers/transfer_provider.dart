@@ -577,7 +577,13 @@ class TransferNotifier extends Notifier<void> {
       files: [],
       folderMode: finalFolderMode,
       status: TransferStatus.scanning,
-      savePath: ref.read(downloadPathProvider),
+      savePath: _resolveSavePath(
+        ref.read(downloadPathProvider),
+        finalFolderMode,
+        count,
+        finalPaths,
+        resolvedContentFiles,
+      ),
     );
 
     // 放入队列
@@ -694,5 +700,24 @@ class TransferNotifier extends Notifier<void> {
       'mixed' => TransferMode.mixed,
       _ => TransferMode.concurrent,
     };
+  }
+
+  /// 确定发送端 savePath 应指向的实际路径
+  /// - 单文件 → 文件路径
+  /// - 文件夹 → 文件夹路径
+  /// - 多文件 → 回退为下载目录
+  String _resolveSavePath(String basePath, bool folderMode, int count,
+      List<String> paths, List<Map<String, dynamic>> contentFiles) {
+    if (folderMode && paths.isNotEmpty) {
+      return paths.first;
+    }
+    if (!folderMode && count == 1) {
+      if (paths.isNotEmpty) return paths.first;
+      if (contentFiles.isNotEmpty) {
+        final realPath = contentFiles.first['realPath'] as String?;
+        if (realPath != null && realPath.isNotEmpty) return realPath;
+      }
+    }
+    return basePath;
   }
 }
