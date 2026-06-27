@@ -96,19 +96,21 @@ Future<String?> _getDeviceName() async {
   return null;
 }
 
+const _platformChannel = MethodChannel('com.fastshare/platform');
+
 /// Android 存储写入权限
 ///
-/// API < 30 (Android ≤9): 传统 READ/WRITE_EXTERNAL_STORAGE
-/// API ≥ 30 (Android 11+): MANAGE_EXTERNAL_STORAGE
-///   Scoped Storage 保护 Download 等共享目录，必须"所有文件访问"权限
+/// API ≥ 30 (Android 11+): 通过系统 Intent 打开「所有文件访问」设置页，
+///   用户手动开启后才能在 Download 等共享目录建文件夹/写文件。
+/// API < 30: 传统 READ/WRITE_EXTERNAL_STORAGE
 Future<void> _requestStoragePermissions() async {
   final sdkInt = _parseAndroidSdkInt();
 
   if (sdkInt >= 30) {
-    // Android 11+：MANAGE_EXTERNAL_STORAGE 才能在 Download 下建目录/写文件
-    final status = await Permission.manageExternalStorage.status;
-    if (!status.isGranted) {
-      await Permission.manageExternalStorage.request();
+    // Android 11+：通过 MethodChannel 跳转系统设置页
+    final granted = await _platformChannel.invokeMethod('hasManageStorage') as bool? ?? true;
+    if (!granted) {
+      await _platformChannel.invokeMethod('requestManageStorage');
     }
   } else if (sdkInt < 29) {
     // Android 9 及以下：传统存储权限

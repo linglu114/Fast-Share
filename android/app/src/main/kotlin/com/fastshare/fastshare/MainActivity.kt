@@ -96,6 +96,32 @@ class MainActivity : FlutterActivity() {
                     startService(intent)
                     result.success(true)
                 }
+                "hasManageStorage" -> {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        result.success(
+                            android.os.Environment.isExternalStorageManager()
+                        )
+                    } else {
+                        result.success(true) // API < 30 无需此权限
+                    }
+                }
+                "requestManageStorage" -> {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        try {
+                            val intent = Intent(
+                                android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION
+                            ).apply {
+                                data = Uri.parse("package:${packageName}")
+                            }
+                            startActivity(intent)
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error("OPEN_FAILED", "Cannot open settings: ${e.message}", null)
+                        }
+                    } else {
+                        result.success(true) // API < 30 无需此权限
+                    }
+                }
                 "openFile" -> {
                     val path = call.argument<String>("path") ?: ""
                     val file = File(path)
