@@ -252,14 +252,7 @@ class ConnectionNotifier extends Notifier<Map<String, bool>> {
       senderDeviceId: offer.senderDeviceId,
       targetDeviceId: ref.read(localDeviceProvider).deviceId,
       peerDeviceName: offer.senderDeviceName ?? offer.senderDeviceId,
-      batchName: offer.fileCount == 1 && !offer.folderMode
-          ? ((offer.files.isNotEmpty
-                  ? offer.files.first['relativePath'] as String?
-                  : null) ??
-              '文件传输')
-              .split(RegExp(r'[/\\]'))
-              .last
-          : '${offer.fileCount} 个文件',
+      batchName: _resolveBatchName(offer),
       totalSize: offer.totalSize,
       fileCount: offer.fileCount,
       files: offer.files
@@ -475,5 +468,19 @@ class ConnectionNotifier extends Notifier<Map<String, bool>> {
     _manager?.dispose();
     _server?.stop();
     _clipboardController.close();
+  }
+
+  /// 根据 offer 推断显示名称：文件夹→文件夹名，单文件→文件名，多文件→数量
+  static String _resolveBatchName(TransferOffer offer) {
+    if (offer.files.isEmpty) return '文件传输';
+    final firstRel = offer.files.first['relativePath'] as String? ?? '';
+    if (offer.folderMode) {
+      final parts = firstRel.split(RegExp(r'[/\\]'));
+      return parts.length > 1 ? parts.first : firstRel;
+    }
+    if (offer.fileCount == 1) {
+      return firstRel.split(RegExp(r'[/\\]')).last;
+    }
+    return '${offer.fileCount} 个文件';
   }
 }

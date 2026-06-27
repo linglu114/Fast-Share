@@ -523,7 +523,15 @@ class TransferNotifier extends Notifier<void> {
         : finalPaths.length;
     final String batchName;
     if (finalFolderMode) {
-      batchName = '${count} 个文件（文件夹）';
+      // 文件夹：显示文件夹名（文件数已在卡片副标题展示）
+      if (resolvedContentFiles.isNotEmpty) {
+        final firstRel = resolvedContentFiles.first['relativePath'] as String? ?? '';
+        batchName = firstRel.split(RegExp(r'[/\\]')).first;
+      } else if (finalPaths.isNotEmpty) {
+        batchName = finalPaths.first.split(RegExp(r'[/\\]')).last;
+      } else {
+        batchName = '文件夹';
+      }
     } else if (count == 1) {
       // 单文件：显示文件名
       if (resolvedContentFiles.isNotEmpty) {
