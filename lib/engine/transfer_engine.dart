@@ -498,7 +498,9 @@ class TransferSession {
         if (type == FileSystemEntityType.directory) {
           await _scanDirectory(path, '');
         } else if (type == FileSystemEntityType.file) {
-          _addFileEntry(path, p.basename(path), 0, 0);
+          final stat = File(path).statSync();
+          _addFileEntry(path, p.basename(path), stat.size,
+              stat.modified.millisecondsSinceEpoch ~/ 1000);
         } else {
           _lastScanError = 'Unknown entity type: $path';
         }
@@ -532,7 +534,11 @@ class TransferSession {
           final normalizedRelPath = relPath.replaceAll('\\', '/');
 
           if (entity is File) {
-            _addFileEntry(entity.path, normalizedRelPath, 0, 0);
+            final stat = entity.statSync();
+            _addFileEntry(
+              entity.path, normalizedRelPath, stat.size,
+              stat.modified.millisecondsSinceEpoch ~/ 1000,
+            );
           } else if (entity is Directory && folderMode) {
             await _scanDirectory(entity.path, relPath);
           }
