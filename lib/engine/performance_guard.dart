@@ -113,7 +113,7 @@ class SlidingWindow {
         final waiter = _WindowWaiter(completer, bytes, paused: true);
         _waiters.add(waiter);
         await completer.future;
-        // resume 后回到循环顶部，重新检查 _cancelled / _paused / 窗口
+        // resume 后回到循环顶部，重新检查 _cancelled / _paused / 窗口额度
         continue;
       }
 
@@ -122,13 +122,18 @@ class SlidingWindow {
         return;
       }
 
-      // 窗口满，排队等待 release 唤醒
+      // 窗口满，排队等待 release 唤醒（_wakeNormalWaiters 预占额度）
       final completer = Completer<void>();
       final waiter = _WindowWaiter(completer, bytes);
       _waiters.add(waiter);
       await completer.future;
-      // release 唤醒后回到循环顶部——release 已预占 _pendingBytes
-      // 重新检查窗口状态（可能在等待期间被暂停/取消）
+      // _wakeNormalWaiters 已预占 _pendingBytes 且通过空间检查，
+      // 直接返回即可（不再回到循环顶部判额度，否则重复计数死锁）。
+      // 防护：如果 cancel 在 wake 之后、return 之前触发——
+      if (_cancelled) {
+        throw StateError('SlidingWindow cancelled');
+      }
+      return;
     }
   }
 
