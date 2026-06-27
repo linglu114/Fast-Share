@@ -331,29 +331,10 @@ class _ActiveTransferCard extends StatelessWidget {
             const SizedBox(height: 2),
             Text('${task.fileCount} 个文件 · ${formatSize(task.totalSize)}',
                 style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
-            // ── 文件列表 ──
+            // ── 当前传输文件 ──
             if (task.files.isNotEmpty) ...[
               const SizedBox(height: 8),
-              ...task.files.take(10).map((f) => Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 1),
-                    child: Row(
-                      children: [
-                        Icon(Icons.insert_drive_file,
-                            size: 14, color: cs.onSurfaceVariant),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(f.relativePath,
-                              style: const TextStyle(fontSize: 12),
-                              overflow: TextOverflow.ellipsis),
-                        ),
-                        Text(formatSize(f.size),
-                            style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
-                      ],
-                    ),
-                  )),
-              if (task.files.length > 10)
-                Text('... 还有 ${task.files.length - 10} 个文件',
-                    style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
+              ..._buildActiveFiles(task, cs),
             ],
             const SizedBox(height: 12),
             // ── 进度条 ──
@@ -488,29 +469,10 @@ class _ReceiveTransferCard extends StatelessWidget {
             const SizedBox(height: 2),
             Text('${task.fileCount} 个文件 · ${formatSize(task.totalSize)}',
                 style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
-            // ── 文件列表 ──
+            // ── 当前传输文件 ──
             if (task.files.isNotEmpty) ...[
               const SizedBox(height: 8),
-              ...task.files.take(10).map((f) => Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 1),
-                    child: Row(
-                      children: [
-                        Icon(Icons.insert_drive_file,
-                            size: 14, color: cs.onSurfaceVariant),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(f.relativePath,
-                              style: const TextStyle(fontSize: 12),
-                              overflow: TextOverflow.ellipsis),
-                        ),
-                        Text(formatSize(f.size),
-                            style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
-                      ],
-                    ),
-                  )),
-              if (task.files.length > 10)
-                Text('... 还有 ${task.files.length - 10} 个文件',
-                    style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
+              ..._buildActiveFiles(task, cs),
             ],
             const SizedBox(height: 12),
             // ── 进度条 ──
@@ -689,6 +651,88 @@ Widget _sharedStatusChip(TransferStatus status) {
     padding: EdgeInsets.zero,
     materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
   );
+}
+
+/// 提取路径中的文件名（去掉文件夹前缀）
+String _basename(String path) {
+  final parts = path.split(RegExp(r'[/\\]'));
+  return parts.last;
+}
+
+/// 构建当前正在传输的文件指示器
+/// 只显示尚未完成的文件的文件名，不显示文件夹路径
+List<Widget> _buildActiveFiles(TransferTask task, ColorScheme cs) {
+  final active = task.files
+      .where((f) =>
+          f.status != TransferStatus.completed &&
+          f.status != TransferStatus.failed &&
+          f.status != TransferStatus.cancelled)
+      .toList();
+
+  if (active.isEmpty) return [];
+
+  // 传输中/暂停状态按实际并发数展示；等待/扫描阶段只展示 1 个
+  final isTransferring = task.status == TransferStatus.transferring ||
+      task.status == TransferStatus.paused;
+  final showCount = isTransferring && task.mode == TransferMode.concurrent
+      ? task.concurrentCount.clamp(1, 5)
+      : 1;
+  final shown = active.take(showCount).toList();
+  final remaining = active.length - shown.length;
+
+  final widgets = <Widget>[];
+  for (var i = 0; i < shown.length; i++) {
+    final f = shown[i];
+    final name = _basename(f.relativePath);
+    final isCurrentlyProcessing = i == 0; // 首个活跃文件即当前处理对象
+    widgets.add(
+      Padding(
+        padding: const EdgeInsets.symmetric(vertical: 1),
+        child: Row(
+          children: [
+            Icon(
+              isCurrentlyProcessing ? Icons.sync : Icons.insert_drive_file,
+              size: 14,
+              color: isCurrentlyProcessing
+                  ? cs.primary
+                  : cs.onSurfaceVariant,
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                name,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: isCurrentlyProcessing
+                      ? FontWeight.w500
+                      : FontWeight.normal,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            Text(
+              formatSize(f.size),
+              style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  if (remaining > 0) {
+    widgets.add(
+      Padding(
+        padding: const EdgeInsets.only(top: 2),
+        child: Text(
+          '还有 $remaining 个文件等待传输',
+          style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+        ),
+      ),
+    );
+  }
+
+  return widgets;
 }
 
 class _SpeedChip extends StatelessWidget {
