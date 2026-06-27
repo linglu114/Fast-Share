@@ -19,26 +19,13 @@ class TransferPage extends ConsumerStatefulWidget {
 }
 
 class _TransferPageState extends ConsumerState<TransferPage> {
-  final _expandedIds = <String>{};
-
-  void _toggleExpanded(String transferId) {
-    setState(() {
-      if (_expandedIds.contains(transferId)) {
-        _expandedIds.remove(transferId);
-      } else {
-        _expandedIds.add(transferId);
-      }
-    });
-  }
-
   @override
   Widget build(BuildContext context) {
-    final tasks = ref.watch(transferQueueProvider);
     final activeTask = ref.watch(activeTransferProvider);
     final receiveTask = ref.watch(receiveTransferProvider);
 
     final showActive =
-        activeTask != null || receiveTask != null || tasks.isNotEmpty;
+        activeTask != null || receiveTask != null;
 
     return Scaffold(
       appBar: AppBar(
@@ -67,19 +54,6 @@ class _TransferPageState extends ConsumerState<TransferPage> {
                     if (activeTask != null) ...[
                       _ActiveTransferCard(task: activeTask, ref: ref),
                       const SizedBox(height: 16),
-                    ],
-                    if (tasks.isNotEmpty) ...[
-                      Text(
-                        '传输队列 (${tasks.length})',
-                        style: Theme.of(context).textTheme.titleSmall,
-                      ),
-                      const SizedBox(height: 8),
-                      ...tasks.map((t) => _QueueItem(
-                        task: t,
-                        ref: ref,
-                        isExpanded: _expandedIds.contains(t.transferId),
-                        onToggle: () => _toggleExpanded(t.transferId),
-                      )),
                     ],
                   ],
                 ),
@@ -548,86 +522,6 @@ class _ReceiveTransferCard extends StatelessWidget {
   }
 
   Widget _buildStatusChip(TransferStatus status) => _sharedStatusChip(status);
-}
-
-class _QueueItem extends StatelessWidget {
-  final TransferTask task;
-  final WidgetRef ref;
-  final bool isExpanded;
-  final VoidCallback onToggle;
-  const _QueueItem({
-    required this.task,
-    required this.ref,
-    required this.isExpanded,
-    required this.onToggle,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Card(
-      child: Column(
-        children: [
-          ListTile(
-            leading: Icon(
-              task.folderMode ? Icons.folder : Icons.insert_drive_file,
-              color: Colors.grey,
-            ),
-            title: Text(task.batchName ?? '文件传输',
-                style: const TextStyle(fontSize: 14)),
-            subtitle: Text(
-              '${task.fileCount} 个文件 · ${formatSize(task.totalSize)}',
-              style: const TextStyle(fontSize: 12),
-            ),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  icon: Icon(isExpanded ? Icons.expand_less : Icons.expand_more, size: 20),
-                  tooltip: isExpanded ? '收起' : '展开文件列表',
-                  onPressed: onToggle,
-                ),
-                IconButton(
-                  icon: const Icon(Icons.close, size: 18),
-                  tooltip: '移除',
-                  onPressed: () {
-                    final queue = ref.read(transferQueueProvider);
-                    ref.read(transferQueueProvider.notifier).state =
-                        queue.where((t) => t.transferId != task.transferId).toList();
-                  },
-                ),
-              ],
-            ),
-            onTap: onToggle,
-          ),
-          if (isExpanded && task.files.isNotEmpty) ...[
-            const Divider(height: 1),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-              child: Column(
-                children: task.files.map((f) => Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 2),
-                  child: Row(
-                    children: [
-                      Icon(Icons.insert_drive_file, size: 14, color: cs.onSurfaceVariant),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(f.relativePath,
-                            style: const TextStyle(fontSize: 12),
-                            overflow: TextOverflow.ellipsis),
-                      ),
-                      Text(formatSize(f.size),
-                          style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
-                    ],
-                  ),
-                )).toList(),
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
 }
 
 /// 共享的状态标签组件
