@@ -57,7 +57,7 @@ class TransferPage extends ConsumerWidget {
                         style: Theme.of(context).textTheme.titleSmall,
                       ),
                       const SizedBox(height: 8),
-                      ...tasks.map((t) => _QueueItem(task: t, ref: ref)),
+                      ...tasks.map((t) => _QueueItem(key: ValueKey(t.transferId), task: t, ref: ref)),
                     ],
                   ],
                 ),
