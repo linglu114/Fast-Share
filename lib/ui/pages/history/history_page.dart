@@ -101,7 +101,8 @@ class _HistoryPageState extends ConsumerState<HistoryPage> {
   Widget _buildRecordCard(HistoryRecord record) {
     final cs = Theme.of(context).colorScheme;
     final isExpanded = record.id != null && _expandedIds.contains(record.id);
-    final isFolder = record.folderMode;
+    final isFolder = record.folderMode ||
+        (() { try { return Directory(record.savePath).existsSync(); } catch (_) { return false; } })();
 
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 6),
