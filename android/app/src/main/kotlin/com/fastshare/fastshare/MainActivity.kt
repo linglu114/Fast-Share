@@ -10,7 +10,10 @@ import android.os.Bundle
 import android.os.Parcelable
 import android.os.PowerManager
 import android.net.Uri
+import android.webkit.MimeTypeMap
+import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
+import java.io.File
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
@@ -92,6 +95,35 @@ class MainActivity : FlutterActivity() {
                     )
                     startService(intent)
                     result.success(true)
+                }
+                "openFile" -> {
+                    val path = call.argument<String>("path") ?: ""
+                    val file = File(path)
+                    if (!file.exists()) {
+                        result.error("NOT_FOUND", "File not found: $path", null)
+                        return@setMethodCallHandler
+                    }
+                    try {
+                        val uri = FileProvider.getUriForFile(
+                            this@MainActivity,
+                            "${packageName}.fileprovider",
+                            file
+                        )
+                        val mimeType = if (file.isDirectory) {
+                            "resource/folder"
+                        } else {
+                            val ext = file.extension.lowercase()
+                            MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "*/*"
+                        }
+                        val intent = Intent(Intent.ACTION_VIEW).apply {
+                            setDataAndType(uri, mimeType)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        startActivity(Intent.createChooser(intent, "打开文件"))
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("OPEN_FAILED", "Cannot open file: $path", e.message)
+                    }
                 }
                 "getBatteryLevel" -> {
                     // 使用 ACTION_BATTERY_CHANGED 读取框架层电量（可被 dumpsys battery set 覆盖）

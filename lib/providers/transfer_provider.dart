@@ -321,6 +321,7 @@ class TransferNotifier extends Notifier<void> {
         status: status,
         timestamp: DateTime.now(),
         savePath: task.savePath,
+        folderMode: task.folderMode,
       ));
     } catch (_) {
       // 历史记录写入失败不阻断主流程

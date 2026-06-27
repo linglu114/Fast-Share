@@ -14,6 +14,7 @@ class HistoryRecord {
   final String status; // completed, failed, cancelled, partial
   final DateTime timestamp;
   final String savePath;
+  final bool folderMode; // 是否为文件夹传输
 
   HistoryRecord({
     this.id,
@@ -30,6 +31,7 @@ class HistoryRecord {
     required this.status,
     required this.timestamp,
     required this.savePath,
+    this.folderMode = false,
   });
 
   Map<String, dynamic> toMap() => {
@@ -47,6 +49,7 @@ class HistoryRecord {
         'status': status,
         'timestamp': timestamp.millisecondsSinceEpoch,
         'savePath': savePath,
+        'folderMode': folderMode ? 1 : 0,
       };
 
   factory HistoryRecord.fromMap(Map<String, dynamic> map) {
@@ -65,6 +68,7 @@ class HistoryRecord {
       status: map['status'] as String,
       timestamp: DateTime.fromMillisecondsSinceEpoch(map['timestamp'] as int),
       savePath: map['savePath'] as String,
+      folderMode: (map['folderMode'] as int?) == 1,
     );
   }
 }

@@ -387,6 +387,7 @@ class ConnectionNotifier extends Notifier<Map<String, bool>> {
         status: cancelled ? 'cancelled' : (success ? 'completed' : 'failed'),
         timestamp: DateTime.now(),
         savePath: task.savePath,
+        folderMode: task.folderMode,
       ));
     } catch (_) {}
   }
