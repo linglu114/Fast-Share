@@ -352,6 +352,13 @@ class TransferSession {
   void pause() {
     _paused = true;
     _cancelConcurrencyTimer(); // 暂停期间不调整并发数
+    // 暂停期间冻结速度/进度上报：接收端 TCP 缓冲中的 in-flight 数据仍会
+    // 持续回 ACK，若不禁用 _speedTimer 与 _notifyProgress，发送端会继续
+    // 推送"还在传"的 progress 事件（bytesTransferred/avgSpeed 继续上升），
+    // 造成点击暂停后进度条/速度仍跳动 1~2s 的"延迟生效"假象。
+    _stopSpeedTimer();
+    _progressTimer?.cancel();
+    _progressTimer = null;
     Logger.log('[ENG] PAUSED transferId=$transferId');
     // 立即发送 PAUSE 到 socket — 单次 _sendRawBytes 不与 chunk 数据交织
     if (!_socketClosed) {
@@ -360,6 +367,7 @@ class TransferSession {
         _sendRawBytes(pauseFrame.toBytes());
       } catch (_) {}
     }
+    // 发送最终一次快照（冻结前状态），随后 progress 被冻结
     _sendEvent('progress', _progressData());
     _sendEvent('transfer_paused', {'transferId': transferId});
   }
@@ -367,6 +375,8 @@ class TransferSession {
   void resume() {
     _paused = false;
     _startConcurrencyMonitor(); // 恢复后重新评估并发数
+    // 恢复速度采样基线：忽略暂停期的空闲，避免恢复瞬间计算出虚假速度
+    _startSpeedTimer();
     Logger.log('[ENG] RESUMED transferId=$transferId');
     _resumeFramePending = true;
     if (!_socketClosed) {
@@ -1471,6 +1481,9 @@ class TransferSession {
   // ═══════════════════════════════════════════════════════════
 
   void _notifyProgress() {
+    // 暂停期间冻结上报：避免接收端 in-flight ACK 持续推进进度/速度，
+    // 产生"暂停后进度仍在跳"的延迟生效假象。
+    if (_paused) return;
     _progressDirty = true;
     _progressTimer ??= Timer(const Duration(milliseconds: 250), () {
       _progressTimer = null;
