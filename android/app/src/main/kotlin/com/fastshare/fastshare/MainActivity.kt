@@ -115,12 +115,26 @@ class MainActivity : FlutterActivity() {
                             }
                             startActivity(intent)
                             result.success(true)
-                        } catch (e: Exception) {
-                            result.error("OPEN_FAILED", "Cannot open settings: ${e.message}", null)
+                        } catch (_: Exception) {
+                            // 国产 ROM 可能不支持该 Intent，回退到应用详情页
+                            try {
+                                val intent = Intent(
+                                    android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS
+                                ).apply {
+                                    data = Uri.parse("package:${packageName}")
+                                }
+                                startActivity(intent)
+                                result.success(true)
+                            } catch (e: Exception) {
+                                result.error("OPEN_FAILED", "Cannot open settings: ${e.message}", null)
+                            }
                         }
                     } else {
-                        result.success(true) // API < 30 无需此权限
+                        result.success(true)
                     }
+                }
+                "getStoragePermissionGuide" -> {
+                    result.success(getStoragePermissionGuide())
                 }
                 "openFile" -> {
                     val path = call.argument<String>("path") ?: ""
@@ -253,6 +267,44 @@ class MainActivity : FlutterActivity() {
     companion object {
         private const val PICK_FILES_REQUEST = 1001
         private const val PICK_FOLDER_REQUEST = 1002
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // ROM 识别 & 存储权限引导
+    // ═══════════════════════════════════════════════════════════
+
+    private fun getRomType(): String {
+        return when {
+            getSystemProp("ro.miui.ui.version.name") != null -> "hyperos"
+            getSystemProp("ro.build.version.opporom") != null -> "coloros"
+            getSystemProp("ro.vivo.os.version") != null -> "originos"
+            getSystemProp("ro.build.version.magic") != null -> "magicos"
+            else -> "aosp"
+        }
+    }
+
+    private fun getSystemProp(key: String): String? {
+        return try {
+            Class.forName("android.os.SystemProperties")
+                .getMethod("get", String::class.java)
+                .invoke(null, key) as? String
+        } catch (_: Exception) { null }
+    }
+
+    private fun getStoragePermissionGuide(): String {
+        val appName = getString(R.string.app_name).ifEmpty { "瞬息" }
+        return when (getRomType()) {
+            "hyperos" ->
+                "设置 → 隐私保护 → 特殊权限设置 → 所有文件访问权限 → 找到「$appName」开启"
+            "coloros" ->
+                "设置 → 安全 → 隐私权限管理 → 文件和媒体 → 应用可访问的文件 → 先开顶部总控开关 → 找到「$appName」授权"
+            "originos" ->
+                "设置 → 应用与权限 → 权限管理 → 右上角 ⋮ → 特殊访问权限 → 所有文件访问权限 → 找到「$appName」"
+            "magicos" ->
+                "设置 → 隐私 → 权限管理 → 右上角 ⋮ → 特殊访问权限 → 所有文件访问权限 → 找到「$appName」"
+            else ->
+                "设置 → 应用 → 特殊应用权限 → 所有文件访问 → 找到「$appName」开启"
+        }
     }
 
     private fun acquireMulticastLock() {

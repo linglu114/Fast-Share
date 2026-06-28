@@ -22,7 +22,8 @@ final pendingShareFilesProvider = StateProvider<List<Map<String, dynamic>>?>((re
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Android: 首次启动时就申请存储权限，确保下载目录可写
+  // Android: 传统存储权限 + 通知权限
+  // MANAGE_EXTERNAL_STORAGE 的引导对话框由 app.dart 在首帧后处理
   if (Platform.isAndroid) {
     await _requestStoragePermissions();
     await _requestNotificationPermission();
@@ -96,30 +97,16 @@ Future<String?> _getDeviceName() async {
   return null;
 }
 
-const _platformChannel = MethodChannel('com.fastshare/platform');
-
-/// Android 存储写入权限
-///
-/// API ≥ 30 (Android 11+): 通过系统 Intent 打开「所有文件访问」设置页，
-///   用户手动开启后才能在 Download 等共享目录建文件夹/写文件。
-/// API < 30: 传统 READ/WRITE_EXTERNAL_STORAGE
+/// 传统存储权限（仅 Android 9 及以下需要）
+/// Android 11+ 的 MANAGE_EXTERNAL_STORAGE 引导对话框由 app.dart 处理
 Future<void> _requestStoragePermissions() async {
   final sdkInt = _parseAndroidSdkInt();
-
-  if (sdkInt >= 30) {
-    // Android 11+：通过 MethodChannel 跳转系统设置页
-    final granted = await _platformChannel.invokeMethod('hasManageStorage') as bool? ?? true;
-    if (!granted) {
-      await _platformChannel.invokeMethod('requestManageStorage');
-    }
-  } else if (sdkInt < 29) {
-    // Android 9 及以下：传统存储权限
+  if (sdkInt < 29) {
     final status = await Permission.storage.status;
     if (!status.isGranted) {
       await Permission.storage.request();
     }
   }
-  // API 29 (Android 10): requestLegacyExternalStorage 豁免
 }
 
 /// Android 13+ 通知权限（前台服务必需）

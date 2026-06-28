@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -42,7 +43,8 @@ class _FastShareAppState extends ConsumerState<FastShareApp>
   final _navigatorKey = GlobalKey<NavigatorState>();
   TransferOffer? _lastShownOffer;
   bool _criticalDialogShownThisEpisode = false;
-  bool _shareFlowActive = false; // 防止 onShareReceived + getPendingShare 双触发
+  bool _shareFlowActive = false;
+  bool _storageGuideShown = false; // 防止重复弹存储权限对话框
 
   @override
   void initState() {
@@ -81,6 +83,11 @@ class _FastShareAppState extends ConsumerState<FastShareApp>
         }
       } catch (_) {}
     });
+
+    // ── 存储权限引导 ──
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _checkAndShowStorageGuide();
+    });
   }
 
   @override
@@ -95,6 +102,8 @@ class _FastShareAppState extends ConsumerState<FastShareApp>
       _onAppBackground();
     } else if (state == AppLifecycleState.resumed) {
       _onAppForeground();
+      // 从系统设置返回后重新检查存储权限
+      if (mounted) _checkAndShowStorageGuide();
     }
   }
 
@@ -346,6 +355,94 @@ class _FastShareAppState extends ConsumerState<FastShareApp>
     showDialog(
       context: navigator.context,
       builder: (ctx) => PerformanceGuardDetailsDialog(limits: limits),
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // 存储权限引导（Android 11+ MANAGE_EXTERNAL_STORAGE）
+  // ═══════════════════════════════════════════════════════════
+  static const _storageChannel = MethodChannel('com.fastshare/platform');
+
+  Future<bool> _hasManageStorage() async {
+    if (!Platform.isAndroid) return true;
+    try {
+      return await _storageChannel.invokeMethod('hasManageStorage') as bool? ?? true;
+    } catch (_) {
+      return true; // 出错时不阻塞
+    }
+  }
+
+  Future<void> _checkAndShowStorageGuide() async {
+    if (_storageGuideShown) return;
+    if (await _hasManageStorage()) return;
+
+    final guide = await _storageChannel.invokeMethod('getStoragePermissionGuide') as String? ?? '';
+    _storageGuideShown = true;
+    if (mounted) _showStoragePermissionGuide(guide);
+  }
+
+  void _showStoragePermissionGuide(String guide) {
+    final navigator = _navigatorKey.currentState;
+    if (navigator == null) return;
+
+    showDialog(
+      context: navigator.context,
+      barrierDismissible: false,
+      builder: (ctx) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.folder_open, size: 22),
+              SizedBox(width: 8),
+              Text('需要存储权限', style: TextStyle(fontSize: 18)),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '瞬息需要「所有文件访问」权限才能将\n接收的文件保存到 Download 目录。',
+                style: TextStyle(fontSize: 14),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                '📍 请在系统设置中按以下路径操作：',
+                style: TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+              const SizedBox(height: 8),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  guide,
+                  style: TextStyle(fontSize: 13, color: Colors.blue.shade800),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(ctx).pop();
+              },
+              child: const Text('稍后再说'),
+            ),
+            FilledButton(
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                _storageChannel.invokeMethod('requestManageStorage');
+              },
+              child: const Text('去设置'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
