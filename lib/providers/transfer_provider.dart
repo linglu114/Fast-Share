@@ -530,8 +530,9 @@ class TransferNotifier extends Notifier<void> {
             .split(RegExp(r'[/\\]'))
             .last;
       } else if (resolvedContentFiles.isNotEmpty) {
-        // SAF 内容 URI 回退：从 relativePath 提取顶层文件夹名
-        final firstRel = resolvedContentFiles.first['relativePath'] as String? ?? '';
+        // SAF 内容 URI 回退：从 name 字段提取顶层文件夹名
+        // ContentUriReader 返回的字段是 name（非 relativePath）
+        final firstRel = resolvedContentFiles.first['name'] as String? ?? '';
         final parts = firstRel.split(RegExp(r'[/\\]'));
         batchName = parts.length > 1 ? parts.first : firstRel;
       } else {

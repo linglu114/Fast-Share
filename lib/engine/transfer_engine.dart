@@ -1227,6 +1227,28 @@ class TransferSession {
     _socket?.add(frame.toBytes());
   }
 
+  String _resolveBatchName() {
+    // 文件路径（paths）优先级最高：直接提取文件夹名/文件名
+    if (paths.length == 1) {
+      return paths.first.split('/').last.split('\\').last;
+    }
+    if (paths.length > 1) {
+      return '${paths.length} 个文件';
+    }
+    // paths 为空（Android SAF 内容 URI 场景）：从引擎文件列表推断
+    if (_files.isNotEmpty) {
+      final firstRel = _files.first.relativePath;
+      if (folderMode) {
+        // 文件夹：提取顶层文件夹名（如 MyFolder/file.txt → MyFolder）
+        final parts = firstRel.split(RegExp(r'[/\\]'));
+        return parts.length > 1 ? parts.first : firstRel;
+      }
+      // 单文件：返回文件名
+      return firstRel.split(RegExp(r'[/\\]')).last;
+    }
+    return '文件传输';
+  }
+
   void _sendTransferOffer() {
     // 排序与传输顺序一致（大文件→小文件），确保 UI 显示的是当前正在传输的文件
     final sorted = [..._files]..sort((a, b) {
@@ -1246,9 +1268,7 @@ class TransferSession {
       transferId: transferId,
       senderDeviceId: senderDeviceId,
       senderDeviceName: senderDeviceName,
-      batchName: paths.length == 1
-          ? paths.first.split('/').last.split('\\').last
-          : '${paths.length} 个文件',
+      batchName: _resolveBatchName(),
       totalSize: _totalSize,
       fileCount: _files.length,
       folderMode: folderMode,
