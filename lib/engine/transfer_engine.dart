@@ -799,13 +799,17 @@ class TransferSession {
         // 构建 FLP 帧（8MB 数据+头+尾，全程同步，阻塞事件循环 ~1-5ms）。
         // 期间 pause 消息无法被处理，必须在帧构建完成后 yield 一次
         // 让事件循环消费排队中的 pause，再决定是否发送。
+        //
+        // 注意：raf.read() 可能 partial read（返回少于请求的字节），帧头
+        // dataLength 必须与实际 data.length 一致，否则接收端校验帧长失败。
+        final actualChunkSize = data.length;
         final tSend0 = DateTime.now().microsecondsSinceEpoch;
         final header = FlpFrame.buildFileDataHeader(
           transferId: transferId,
           fileId: file.fileId,
           chunkIndex: i,
           offset: offset,
-          dataLength: currentChunkSize,
+          dataLength: actualChunkSize,
         );
         final zc = FlpFrame.zeroChecksum;
         final frame = Uint8List(header.length + data.length + zc.length);
@@ -823,7 +827,7 @@ class TransferSession {
         // 而是受接收端 ACK 驱动。暂停时 _window.pause() 导致 acquire 阻塞，
         // 网络级即时停止，最多再发完已 acquire 的 1 个 chunk。
         try {
-          await _window.acquire(currentChunkSize);
+          await _window.acquire(actualChunkSize);
         } on StateError {
           // 窗口取消 → 传输取消
           break;
@@ -833,7 +837,7 @@ class TransferSession {
         if (!_sendRawBytes(frame, allowWhenPaused: false)) {
           if (_paused) {
             // acquire 成功但发送前被暂停：退还窗口额度
-            _window.release(currentChunkSize);
+            _window.release(actualChunkSize);
             continue;
           }
           break; // socket closed or cancelling
@@ -845,9 +849,9 @@ class TransferSession {
         final tSend1 = DateTime.now().microsecondsSinceEpoch;
         sendUs += tSend1 - tSend0;
 
-        _bytesTransferred += currentChunkSize;
-        file.bytesTransferred += currentChunkSize;
-        offset += currentChunkSize;
+        _bytesTransferred += actualChunkSize;
+        file.bytesTransferred += actualChunkSize;
+        offset += actualChunkSize;
         i++; // 仅在成功发送后递增 chunk 索引
 
         _notifyProgress();
