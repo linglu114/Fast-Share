@@ -496,7 +496,7 @@ class TransferSession {
       try {
         final type = FileSystemEntity.typeSync(path);
         if (type == FileSystemEntityType.directory) {
-          await _scanDirectory(path, '');
+          await _scanDirectory(path, p.basename(path));
         } else if (type == FileSystemEntityType.file) {
           final stat = File(path).statSync();
           _addFileEntry(path, p.basename(path), stat.size,
