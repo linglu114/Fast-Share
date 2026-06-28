@@ -4,7 +4,7 @@
 
 **协议名称**：FLP（FastShare LAN Protocol）
 **协议版本**：v1.2
-**发布日期**：2026-05-14
+**发布日期**：2026-06-29
 **传输层**：TCP（未来可扩展 QUIC）
 **适用范围**：局域网设备发现、配对、文件/文件夹传输、断点续传、剪贴板共享
 **目标平台**：Android / Windows（未来可扩展 iOS/macOS/Linux）
@@ -433,7 +433,7 @@ Sender 发送文件元信息：
 
 ## 8.2 FILE_DATA（0x31）
 
-FILE_DATA payload 必须为二进制结构体：
+FILE_DATA payload 必须为二进制结构体（48 字节头部 + 数据）：
 
 ```
 +----------------+----------------+----------------+----------------+
@@ -441,21 +441,10 @@ FILE_DATA payload 必须为二进制结构体：
 +----------------+----------------+----------------+----------------+
 | dataLength(4B) | dataBytes(N)                                   |
 +-----------------------------------------------------------------+
-| chunkHash(8B)                                                   |
-+-----------------------------------------------------------------+
 ```
 
-字段说明：
-
-- `chunkIndex`：从 0 开始递增
-- `offset`：文件偏移
-- `dataLength`：本 chunk 数据长度
-- `chunkHash`：xxHash64(dataBytes)
-
-约束：
-
-- `offset` 必须等于 `chunkIndex * chunkSize`（除最后一块）
-- 若不符合，Receiver 必须拒绝写入并返回 ERROR
+> 当前实现中 CRC32 校验通过 Frame 级别零校验和标记（checksum=0）跳过，
+>  依赖 TCP 和 WiFi 链路层完整性保障，chunkHash 暂未实现。
 
 ---
 
@@ -662,14 +651,16 @@ pathLen(2B) + pathBytes(pathLen) + fileSize(8B) + fileHash(8B)
 
 # 14. Recommended Defaults（推荐默认参数）
 
-| 参数                     | 默认值                   |
-| ------------------------ | ------------------------ |
-| chunkSize                | 1MB（PC），256KB（手机） |
-| windowSize（在途 chunk） | 32                       |
-| ackInterval              | 每 200ms 或累计 4MB      |
-| pingInterval             | 3 秒                     |
-| pingTimeout              | 10 秒                    |
-| maxFrameLength           | 16MB                     |
+| 参数               | 默认值                    |
+| ------------------ | ------------------------- |
+| chunkSize          | 8MB                       |
+| largeFileThreshold | 100MB                     |
+| windowSize（在途） | 3 chunk（24MB）           |
+| ackInterval        | 每 500ms 或累计 8MB       |
+| pingInterval       | 3 秒                      |
+| pingTimeout        | 10 秒                     |
+| maxFrameLength     | 16MB                      |
+| defaultPort        | 34568（TCP）/ 45679（UDP）|
 
 ---
 
