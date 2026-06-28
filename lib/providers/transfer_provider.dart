@@ -13,6 +13,7 @@ import '../platform/foreground_service_manager.dart';
 import '../platform/content_uri_reader.dart';
 import 'settings_provider.dart';
 import 'connection_provider.dart';
+import 'navigation_provider.dart';
 
 /// 传输队列 Provider
 final transferQueueProvider = StateProvider<List<TransferTask>>((ref) => []);
@@ -592,6 +593,9 @@ class TransferNotifier extends Notifier<void> {
         'logDir': tempDir,
       },
     });
+
+    // 发送后跳转到传输页
+    ref.read(currentTabProvider.notifier).state = 1;
   }
 
   void pauseTransfer(String transferId) {

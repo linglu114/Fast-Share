@@ -12,6 +12,7 @@ import '../engine/frame.dart';
 import '../engine/transfer_control.dart';
 import '../business/connection/connection_manager.dart';
 import '../network/tcp_server.dart';
+import 'navigation_provider.dart';
 import '../storage/trusted_device_repository.dart';
 import '../util/logger.dart';
 import '../platform/foreground_service_manager.dart';
@@ -269,6 +270,9 @@ class ConnectionNotifier extends Notifier<Map<String, bool>> {
     ref.read(receiveTransferProvider.notifier).state = task;
     // pendingOffer 延迟到 transfer_started 事件时清除，
     // 防止引擎启动失败时 UI 失去反馈
+
+    // 接收确认后跳转到传输页
+    ref.read(currentTabProvider.notifier).state = 1;
   }
 
   void rejectPendingOffer() {
