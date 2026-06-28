@@ -266,6 +266,16 @@ class TransferSession {
     // 阶段 1: 扫描文件列表 (仅收集路径，不校验)
     await _scanFiles();
 
+    // 排序与传输顺序一致（大文件在前，小文件在后），
+    // 确保 UI 第一个未完成文件就是当前正在传输的文件
+    _files.sort((a, b) {
+      final aLarge = a.size >= largeFileThreshold;
+      final bLarge = b.size >= largeFileThreshold;
+      if (aLarge && !bLarge) return -1;
+      if (!aLarge && bLarge) return 1;
+      return 0;
+    });
+
     if (_cancelled || _files.isEmpty) {
       _completeWithError('No files to transfer');
       return;
@@ -1218,7 +1228,15 @@ class TransferSession {
   }
 
   void _sendTransferOffer() {
-    final fileSummaries = _files.map((f) => {
+    // 排序与传输顺序一致（大文件→小文件），确保 UI 显示的是当前正在传输的文件
+    final sorted = [..._files]..sort((a, b) {
+      final aLarge = a.size >= largeFileThreshold;
+      final bLarge = b.size >= largeFileThreshold;
+      if (aLarge && !bLarge) return -1;
+      if (!aLarge && bLarge) return 1;
+      return 0;
+    });
+    final fileSummaries = sorted.map((f) => {
       'fileId': f.fileId,
       'relativePath': f.relativePath,
       'size': f.size,

@@ -565,54 +565,32 @@ List<Widget> _buildActiveFiles(TransferTask task, ColorScheme cs) {
 
   if (active.isEmpty) return [];
 
-  // 传输中/暂停状态按实际并发数展示；等待/扫描阶段只展示 1 个
-  final isTransferring = task.status == TransferStatus.transferring ||
-      task.status == TransferStatus.paused;
-  final showCount = isTransferring && task.mode == TransferMode.concurrent
-      ? task.concurrentCount.clamp(1, 5)
-      : 1;
-  final shown = active.take(showCount).toList();
-  final remaining = active.length - shown.length;
+  final f = active.first;
+  final name = _basename(f.relativePath);
+  final remaining = active.length - 1;
 
-  final widgets = <Widget>[];
-  for (var i = 0; i < shown.length; i++) {
-    final f = shown[i];
-    final name = _basename(f.relativePath);
-    final isCurrentlyProcessing = i == 0; // 首个活跃文件即当前处理对象
-    widgets.add(
-      Padding(
-        padding: const EdgeInsets.symmetric(vertical: 1),
-        child: Row(
-          children: [
-            Icon(
-              isCurrentlyProcessing ? Icons.sync : Icons.insert_drive_file,
-              size: 14,
-              color: isCurrentlyProcessing
-                  ? cs.primary
-                  : cs.onSurfaceVariant,
+  final widgets = <Widget>[
+    Padding(
+      padding: const EdgeInsets.symmetric(vertical: 1),
+      child: Row(
+        children: [
+          Icon(Icons.sync, size: 14, color: cs.primary),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              name,
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
+              overflow: TextOverflow.ellipsis,
             ),
-            const SizedBox(width: 6),
-            Expanded(
-              child: Text(
-                name,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: isCurrentlyProcessing
-                      ? FontWeight.w500
-                      : FontWeight.normal,
-                ),
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            Text(
-              formatSize(f.size),
-              style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
-            ),
-          ],
-        ),
+          ),
+          Text(
+            formatSize(f.size),
+            style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+          ),
+        ],
       ),
-    );
-  }
+    ),
+  ];
 
   if (remaining > 0) {
     widgets.add(
