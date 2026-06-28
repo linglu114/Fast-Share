@@ -228,14 +228,14 @@ class _DevicesPageState extends ConsumerState<DevicesPage>
                     },
                   ),
                   IconButton(
-                    icon: const Icon(Icons.send, size: 18),
-                    tooltip: '发送文件',
-                    onPressed: () => _sendFilesToDevice(context, ref, device),
-                  ),
-                  IconButton(
                     icon: const Icon(Icons.content_paste, size: 18),
                     tooltip: '发送剪贴板',
                     onPressed: () => _showClipboardSendDialog(context, ref, device),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.send, size: 18),
+                    tooltip: '发送文件',
+                    onPressed: () => _sendFilesToDevice(context, ref, device),
                   ),
                 ] else ...[
                   TextButton(
