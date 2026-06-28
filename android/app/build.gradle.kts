@@ -20,35 +20,16 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.fastshare.fastshare"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
-
-        ndk {
-            // 仅编译 arm64-v8a，过滤插件原生库中的 x86_64/armeabi-v7a
-            // 配合 --target-platform android-arm64 完整缩减 APK
-            abiFilters += listOf("arm64-v8a")
-        }
     }
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
-        }
-    }
-
-    packaging {
-        jniLibs {
-            // 排除插件中的 x86_64 / armeabi-v7a 原生库（mobile_scanner ML Kit 等）
-            // 仅 arm64-v8a 覆盖 99%+ 现役设备
-            excludes += setOf("lib/x86_64/**", "lib/armeabi-v7a/**")
         }
     }
 }
