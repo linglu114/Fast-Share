@@ -1,60 +1,65 @@
 # FastShare Release 构建脚本
-# 输出: 4 个 Android APK（分架构 + 全架构）+ Windows ZIP
-# 用法: .\scripts\build_release.ps1
+# 输出: 4 个 Android APK（arm64 / arm / x64 / all）+ Windows ZIP
+# 用法: powershell -File scripts\build_release.ps1
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 $root = Split-Path $PSScriptRoot -Parent
 $releaseDir = "$root\release"
-$ver = (Get-Content "$root\pubspec.yaml" | Select-String 'version:\s*(\S+)').Matches.Groups[1].Value
-$date = Get-Date -Format "yyyyMMdd"
+
+# 读取版本号
+$pubspec = Get-Content "$root\pubspec.yaml" -Raw
+$ver = "1.0.0"
+if ($pubspec -match 'version:\s*(\S+)') { $ver = $Matches[1] }
 
 Write-Host "=== FastShare v$ver Release 构建 ==="
-Write-Host "输出目录: $releaseDir`n"
+Write-Host ""
 
-# 清理
 if (Test-Path $releaseDir) { Remove-Item $releaseDir -Recurse -Force }
 New-Item $releaseDir -ItemType Directory | Out-Null
 
 Push-Location $root
 
 # ═══════════════════════════════════════════
-# Android: 3 个分架构 + 1 个全架构
+# Android: 分架构 + 全架构
 # ═══════════════════════════════════════════
-$androidPlatforms = @(
-    @{Name="arm64-v8a"; Flag="android-arm64"},
-    @{Name="armeabi-v7a"; Flag="android-arm"},
-    @{Name="x86_64"; Flag="android-x64"},
-    @{Name="all"; Flag=""}
+
+$targets = @(
+    @("arm64-v8a", "android-arm64"),
+    @("armeabi-v7a", "android-arm"),
+    @("x86_64", "android-x64"),
+    @("all", "")
 )
 
-foreach ($plat in $androidPlatforms) {
-    $name = $plat.Name
-    $flag = $plat.Flag
-    Write-Host "--- Android $name ---"
+foreach ($t in $targets) {
+    $name = $t[0]
+    $flag = $t[1]
 
-    if ($flag) {
-        flutter build apk --release --target-platform $flag 2>&1 | Select-String "Built|FAILED"
+    Write-Host "--- Android $name ---"
+    if ($flag -eq "") {
+        flutter build apk --release 2>&1 | Out-Null
     } else {
-        flutter build apk --release 2>&1 | Select-String "Built|FAILED"
+        flutter build apk --release --target-platform $flag 2>&1 | Out-Null
     }
 
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "ERROR: Android $name build failed!" -ForegroundColor Red
+        Write-Host "ERROR: build failed!" -ForegroundColor Red
         Pop-Location; exit 1
     }
 
     $src = "$root\build\app\outputs\flutter-apk\app-release.apk"
     $dst = "$releaseDir\fastshare-v$ver-$name.apk"
-    Copy-Item $src $dst
+    Copy-Item $src $dst -Force
     $size = [math]::Round((Get-Item $dst).Length / 1MB, 1)
-    Write-Host "  $dst ($size MB)`n"
+    Write-Host "  $dst ($size MB)"
+    Write-Host ""
 }
 
 # ═══════════════════════════════════════════
-# Windows: ZIP 打包
+# Windows: ZIP
 # ═══════════════════════════════════════════
 Write-Host "--- Windows ---"
-flutter build windows --release 2>&1 | Select-String "Built|FAILED"
+flutter build windows --release 2>&1 | Out-Null
+
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: Windows build failed!" -ForegroundColor Red
     Pop-Location; exit 1
@@ -64,7 +69,8 @@ $winSrc = "$root\build\windows\x64\runner\Release\*"
 $winZip = "$releaseDir\fastshare-v$ver-windows-x64.zip"
 Compress-Archive -Path $winSrc -DestinationPath $winZip -CompressionLevel Optimal -Force
 $size = [math]::Round((Get-Item $winZip).Length / 1MB, 1)
-Write-Host "  $winZip ($size MB)`n"
+Write-Host "  $winZip ($size MB)"
+Write-Host ""
 
 Pop-Location
 
@@ -74,6 +80,6 @@ Pop-Location
 Write-Host "=== 构建完成 v$ver ==="
 Get-ChildItem $releaseDir | ForEach-Object {
     $s = [math]::Round($_.Length / 1MB, 1)
-    Write-Host "  $($_.Name)  $s MB"
+    $name = $_.Name.PadRight(50)
+    Write-Host "  $name $s MB"
 }
-Write-Host "`n上传到 GitHub Releases: https://github.com/linglu114/Fast-Share/releases/new"
