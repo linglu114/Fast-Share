@@ -292,7 +292,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun getStoragePermissionGuide(): String {
-        val appName = getString(R.string.app_name).ifEmpty { "瞬息" }
+        val appName = "瞬息"
         return when (getRomType()) {
             "hyperos" ->
                 "设置 → 隐私保护 → 特殊权限设置 → 所有文件访问权限 → 找到「$appName」开启"
